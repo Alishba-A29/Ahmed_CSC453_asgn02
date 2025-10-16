@@ -159,23 +159,23 @@ void lwp_yield(void){
   thread old = current;
   thread next = NULL;
 
-  /* 1) Choose next BEFORE re-admitting current (preserves FIFO) */
+  // 1) Ask scheduler for next thread
   if (cur_sched && cur_sched->next)
     next = cur_sched->next();
 
-  /* 2) Re-admit 'old' only if it's a live LWP (not system thread, not terminated) */
+  // 2) Re-admit old thread if still runnable
   if (old && old != scheduler_main && !LWPTERMINATED(old->status)) {
     if (cur_sched->admit) cur_sched->admit(old);
   }
 
-  /* 3) If no next runnable, return control to system thread */
+  // 3) If no next thread, switch to scheduler_main
   if (!next) {
     current = scheduler_main;
     swap_rfiles(&old->state, &scheduler_main->state);
     return;
   }
 
-  /* 4) Switch to chosen next */
+  // 4) Context switch to next thread
   current = next;
   swap_rfiles(&old->state, &next->state);
 }
