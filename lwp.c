@@ -63,16 +63,17 @@ static void ensure_scheduler(void){
 }
 
 // Find thread by TID
-thread tid2thread(tid_t tid){
-  for(thread p = all_threads; p; p = p->lib_one){
-    if(p->tid == tid) return p;
-  }
-  return NULL;
+thread tid2thread(tid_t tid) {
+    for (thread p = all_threads; p; p = p->lib_one) {
+        if (p->tid == tid) return p;
+    }
+    // MUST return NULL for a bad tid
+    return NULL;
 }
 
 // Trampoline function for new LWPs
 static void lwp_trampoline(lwpfun f, void *arg){
-    int rc = f ? f(arg) : 0;          // if NULL, treat as no-op 0
+    int rc = f ? f(arg) : 0;
     lwp_exit(rc);
 }
 
@@ -246,43 +247,30 @@ tid_t lwp_wait(int *status){
 }
 
 // Set the current scheduler, migrating threads as needed
-void lwp_set_scheduler(scheduler newsched){
+void lwp_set_scheduler(scheduler newsched) {
   if (!newsched) newsched = rr_scheduler();
+  if (newsched == cur_sched) return;
 
-  // No change
-  if (cur_sched == newsched) return;
-
-  // Init new scheduler first
+  // 1) Init new scheduler
   if (newsched->init) newsched->init();
 
-  // Drain all threads from old scheduler into a temporary list
-  thread moved_head = NULL, moved_tail = NULL;
-  if (cur_sched && cur_sched->next) {
-    thread t;
-    while ((t = cur_sched->next()) != NULL) {
-      // Skip system thread and any already-terminated 
-      // threads (shouldn’t be in ready queue anyway)
-      if (t == scheduler_main || LWPTERMINATED(t->status)) continue;
-
-      // Unlink from old scheduler
-      t->sched_one = NULL; t->sched_two = NULL;
-      if (!moved_head) moved_head = moved_tail = t;
-      else { moved_tail->sched_two = t; moved_tail = t; }
+  //  2) Migrate all live threads (except current)
+  if (cur_sched) {
+    for (thread p = all_threads; p; p = p->lib_one) {
+      if (p == current) continue;
+      if (LWPTERMINATED(p->status)) continue;
+      if (cur_sched->remove) cur_sched->remove(p);
+      if (newsched->admit)  newsched->admit(p);
     }
+
+    // 3) Shutdown old scheduler
+    if (cur_sched->shutdown) cur_sched->shutdown();
   }
 
-  // Shutdown old scheduler
-  if (cur_sched && cur_sched->shutdown) cur_sched->shutdown();
-
-  // Switch current scheduler
+  // 4) Switch
   cur_sched = newsched;
-
-  // Re-admit all moved threads to new scheduler
-  for (thread t = moved_head; t; t = t->sched_two) {
-    t->sched_one = t->sched_two = NULL;
-    if (cur_sched->admit) cur_sched->admit(t);
-  }
 }
+
 
 
 // Get the current scheduler, initializing default if needed

@@ -1,64 +1,56 @@
-// sched_rr.c
 #include "lwp.h"
 #include <stdlib.h>
 
-// A simple round-robin scheduler implementation
-static thread head = NULL, tail = NULL;
-static int qcount = 0;
+typedef struct node { thread t; struct node *next; } node;
+static node *head = NULL, *tail = NULL;
 
-static void rr_init(void){
-  head = tail = NULL;
-  qcount = 0;
-}
+static void rr_init(void){ head = tail = NULL; }
 
 static void rr_shutdown(void){
-  // nothing to free; threads live outside the scheduler
-  head = tail = NULL;
-  qcount = 0;
+  while (head) {
+     node *n = head; 
+     head = head->next;
+      free(n); }
+  tail = NULL;
 }
 
 static void rr_admit(thread t){
-  // Append to tail of queue
-  t->sched_one = NULL;
-  t->sched_two = NULL;
-  if(!tail){ head = tail = t; }
-  else { tail->sched_one = t; tail = t; }
-  qcount++;
+  node *n = (node*)malloc(sizeof(*n));
+  if (!n) return;
+  n->t = t; n->next = NULL;
+  if (!tail) head = tail = n;
+  else { tail->next = n; tail = n; }
 }
 
-static void rr_remove(thread victim){
-  thread prev = NULL, cur = head;
-  while(cur){
-    if(cur == victim){
-      if(prev) prev->sched_one = cur->sched_one; else head = cur->sched_one;
-      if(cur == tail) tail = prev;
-      // do not touch cur->sched_* so caller can inspect if desired
-      qcount--;
+static void rr_remove(thread t){
+  node *prev = NULL, *cur = head;
+  while (cur) {
+    if (cur->t == t) {
+      if (prev) prev->next = cur->next; 
+      else head = cur->next;
+      if (cur == tail) tail = prev;
+      free(cur);
       return;
     }
-    prev = cur;
-    cur = cur->sched_one;
+    prev = cur; cur = cur->next;
   }
-  // not found; no-op
 }
 
 static thread rr_next(void){
-  if(!head) return NULL;
-  thread t = head;
-  head = t->sched_one;
-  if(!head) tail = NULL;
-  // Clear link pointers for cleanliness
-  qcount--;
+  if (!head) return NULL;
+  node *n = head; head = head->next;
+  if (!head) tail = NULL;
+  thread t = n->t; free(n);
   return t;
 }
 
-static int rr_qlen(void){ return qcount; }
+static int rr_qlen(void){
+  int k = 0; for (node *p=head; p; p=p->next) k++; return k;
+}
 
 static struct scheduler RR = {
   .init=rr_init, .shutdown=rr_shutdown, .admit=rr_admit,
   .remove=rr_remove, .next=rr_next, .qlen=rr_qlen
 };
 
-scheduler rr_scheduler(void){ 
-  return &RR; 
-}
+scheduler rr_scheduler(void){ return &RR; }
