@@ -30,11 +30,14 @@ registers {
   unsigned long r13;
   unsigned long r14;
   unsigned long r15;
-  struct fxsave fxsave;   // Space to save floating point state
+  struct fxsave fxsave __attribute__((aligned(16)));
 } rfile;
 #else
   #error "This only works on x86_64 for now"
 #endif
+/* Compile-time guard: ensure fxsave member sits at a 16-byte offset */
+#include <stddef.h>
+typedef char _fxsave_align_check[(offsetof(rfile, fxsave) % 16) == 0 ? 1 : -1];
 
 typedef unsigned long tid_t;
 #define NO_THREAD 0             // An always invalid thread id
