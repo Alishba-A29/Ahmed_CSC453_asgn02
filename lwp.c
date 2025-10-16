@@ -143,13 +143,14 @@ void lwp_exit(int code){
 
     if(cur_sched && cur_sched->remove) cur_sched->remove(me);
 
-    // use the helper so it's not "unused"
     term_enqueue(me);
 
-    current = NULL;
+    // hand control straight back to the system thread
+    current = scheduler_main;
     swap_rfiles(&me->state, &scheduler_main->state);
     // never returns
 }
+
 
 // Get TID of current thread (or NO_THREAD if none)
 tid_t lwp_gettid(void){
@@ -159,37 +160,29 @@ tid_t lwp_gettid(void){
 // Yield: voluntarily give up the CPU to another thread
 void lwp_yield(void){
   ensure_scheduler();
-  thread old = current;
+  thread old = current ? current : scheduler_main;   // safety
 
-  // 1) Ask scheduler for next thread to run
   thread next = NULL;
-  if (cur_sched && cur_sched->next)
-    next = cur_sched->next();
+  if (cur_sched && cur_sched->next) next = cur_sched->next();
 
-  /* 2) Re-admit 'old' ONLY if:
-        - it's not the system thread,
-        - it's still live (not exiting),
-        - and the scheduler did not choose 'old' to run again right now. */
   if (old && old != scheduler_main 
-            && !LWPTERMINATED(old->status) 
-            && next != old) {
+    && !LWPTERMINATED(old->status) 
+    && next != old) {
     if (cur_sched->admit) cur_sched->admit(old);
   }
 
-  // 3) If no next thread, run the system thread
   if (!next) {
     current = scheduler_main;
     swap_rfiles(&old->state, &scheduler_main->state);
     return;
   }
 
-  // 4) If next is old, no context switch needed
-  if (next == old) return;
+  if (next == old) return;       // no switch needed
 
-  // 5) Context switch to 'next'
   current = next;
   swap_rfiles(&old->state, &next->state);
 }
+
 
 
 
