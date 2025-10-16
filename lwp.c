@@ -129,10 +129,11 @@ tid_t lwp_create(lwpfun f, void *arg){
 // Exit: terminate the current thread
 void lwp_exit(int status){
   thread me = current;
-  // sanity check
+
+  // Safety check: if no current thread, just return
   me->status = MKTERMSTAT(LWP_TERM, status);
 
-  // Enqueue for lwp_wait()
+  // Enqueue on terminated list for lwp_wait()
   thread next = NULL;
   if (cur_sched && cur_sched->next)
     next = cur_sched->next();
@@ -140,12 +141,12 @@ void lwp_exit(int status){
   if (!next) {
     current = scheduler_main;
     swap_rfiles(&me->state, &scheduler_main->state);
-    // never returns
   } else {
     current = next;
     swap_rfiles(&me->state, &next->state);
   }
 }
+
 
 
 // Get TID of current thread (or NO_THREAD if none)
@@ -157,28 +158,35 @@ tid_t lwp_gettid(void){
 void lwp_yield(void){
   ensure_scheduler();
   thread old = current;
-  thread next = NULL;
 
-  // 1) Ask scheduler for next thread
+  // 1) Ask scheduler for next thread to run
+  thread next = NULL;
   if (cur_sched && cur_sched->next)
     next = cur_sched->next();
 
-  // 2) Re-admit old thread if still runnable
-  if (old && old != scheduler_main && !LWPTERMINATED(old->status)) {
+  /* 2) Re-admit 'old' ONLY if:
+        - it's not the system thread,
+        - it's still live (not exiting),
+        - and the scheduler did not choose 'old' to run again right now. */
+  if (old && old != scheduler_main && !LWPTERMINATED(old->status) && next != old) {
     if (cur_sched->admit) cur_sched->admit(old);
   }
 
-  // 3) If no next thread, switch to scheduler_main
+  // 3) If no next thread, run the system thread
   if (!next) {
     current = scheduler_main;
     swap_rfiles(&old->state, &scheduler_main->state);
     return;
   }
 
-  // 4) Context switch to next thread
+  // 4) If next is old, no context switch needed
+  if (next == old) return;
+
+  // 5) Context switch to 'next'
   current = next;
   swap_rfiles(&old->state, &next->state);
 }
+
 
 
 // Start the LWP system by capturing the current thread as scheduler_main
