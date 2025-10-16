@@ -1,0 +1,14 @@
+Alishba Ahmed (aahmed29)
+
+// To build
+% make
+
+// I made a directory with test files in them so I would compile my test with
+% make -C tests clean && make -C tests
+
+// Then run my tests with 
+% LD_LIBRARY_PATH=. ./tests/<testname>
+
+/* This project had a lot of segfaults and bad pointers. 
+    After a while and a lot of understanding conceptual
+    issues, I was able to get it working. */

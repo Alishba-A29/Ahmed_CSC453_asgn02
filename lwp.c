@@ -1,0 +1,261 @@
+// lwp.c
+#include "lwp.h"
+#include "fp.h"
+#include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <unistd.h>
+#include <stdint.h>
+#include <stdio.h>
+
+// Global state
+static scheduler cur_sched = NULL;   // current scheduler
+static thread    current   = NULL;
+static tid_t     next_tid  = 1;
+static thread scheduler_main = NULL;   // never admitted to RR queue
+static thread term_head = NULL, term_tail = NULL;
+static thread all_threads = NULL;
+
+// Terminated FIFO management
+static void term_enqueue(thread t){
+    t->exited = NULL;
+    if(!term_tail) term_head = term_tail = t;
+    else { term_tail->exited = t; term_tail = t; }
+}
+static thread term_dequeue(void){
+    if(!term_head) return NULL;
+    thread t = term_head;
+    term_head = term_head->exited;
+    if(!term_head) term_tail = NULL;
+    t->exited = NULL;
+    return t;
+}
+
+// All-threads singly-linked list management
+static void add_thread_global(thread t){
+    t->lib_one = all_threads;
+    all_threads = t;
+}
+
+static void remove_thread_global(thread t){
+    thread *pp = &all_threads;
+    while (*pp) {
+        if (*pp == t) {
+            *pp = t->lib_one;  // unlink from list
+            return;
+        }
+        pp = &(*pp)->lib_one;
+    }
+}
+
+// Minimal internal RR scheduler forward (implemented in sched_rr.c)
+extern scheduler rr_scheduler(void);
+
+// Ensure the default scheduler is initialized once
+static void ensure_scheduler(void){
+    if(!cur_sched){
+        cur_sched = rr_scheduler();        // factory from sched_rr.c
+        if(cur_sched && cur_sched->init)
+            cur_sched->init();
+    }
+}
+
+// Find thread by TID
+thread tid2thread(tid_t tid){
+  for(thread p = all_threads; p; p = p->lib_one){
+    if(p->tid == tid) return p;
+  }
+  return NULL;
+}
+
+// Trampoline function for new LWPs
+static void lwp_trampoline(lwpfun f, void *arg){
+    int rc = f ? f(arg) : 0;          // if NULL, treat as no-op 0
+    lwp_exit(rc);
+}
+
+
+// Create: allocate and initialize a new thread
+tid_t lwp_create(lwpfun f, void *arg){
+    thread t = (thread)calloc(1, sizeof(*t));
+    if(!t) return NO_THREAD;
+
+    // Bookkeeping
+    t->tid    = next_tid++;
+    t->status = MKTERMSTAT(LWP_LIVE, 0);
+
+    size_t pagesz = (size_t)sysconf(_SC_PAGESIZE);
+    size_t stksz  = 1UL<<20;                 // 1 MiB default
+    stksz = (stksz + pagesz - 1) & ~(pagesz - 1);  // round up to page size
+
+    // stack allocation
+    int flags = MAP_PRIVATE | MAP_ANONYMOUS;
+#ifdef MAP_STACK
+    flags |= MAP_STACK;
+#endif
+    void *stk = mmap(NULL, stksz, PROT_READ|PROT_WRITE, flags, -1, 0);
+    if(stk == MAP_FAILED){
+        free(t);
+        return NO_THREAD;
+    }
+
+    t->stack     = (unsigned long*)stk;
+    t->stacksize = stksz;
+
+    // pass (f, arg) in %rdi/%rsi to the trampoline
+    t->state.rdi = (unsigned long)f;
+    t->state.rsi = (unsigned long)arg;
+
+    // zero GPRs we don't care about initially
+    t->state.rax = t->state.rbx = t->state.rcx = t->state.rdx = 0;
+    t->state.r8  = t->state.r9  = t->state.r10 = t->state.r11 = 0;
+    t->state.r12 = t->state.r13 = t->state.r14 = t->state.r15 = 0;
+
+    // FPU init as provided by fp.h
+    t->state.fxsave = FPU_INIT;
+
+    // After 'ret' into lwp_trampoline, ABI wants %rsp ≡ 8 (mod 16).
+    // So the saved %rsp itself must be 16B aligned, and the slot at [%rsp]
+    // must contain the non-zero return address (lwp_trampoline).
+    uintptr_t top = (uintptr_t)t->stack + t->stacksize;      // one past top
+    uintptr_t rsp = (top - 8) & ~(uintptr_t)0xFUL;           // 16B-aligned
+
+    *(unsigned long*)rsp = (unsigned long)lwp_trampoline;    // retaddr
+    t->state.rsp = rsp;                                      // saved %rsp (16B aligned)
+    t->state.rbp = rsp - 8;                                  // plausible, aligned %rbp
+
+    // Add to global list and admit to scheduler
+    add_thread_global(t);
+    ensure_scheduler();
+    if(cur_sched && cur_sched->admit) cur_sched->admit(t);
+
+    return t->tid;
+}
+
+// Exit: terminate the current thread
+void lwp_exit(int status){
+    if(!current) return;
+
+    // mark terminated with 8-bit code
+    current->status = MKTERMSTAT(LWP_TERM, status);
+
+    // put this thread on the terminated FIFO
+    term_enqueue(current);
+
+    // switch away: to next runnable, or back to scheduler_main if none
+    lwp_yield();
+}
+
+// Get TID of current thread (or NO_THREAD if none)
+tid_t lwp_gettid(void){
+  return current ? current->tid : NO_THREAD;
+}
+
+// Yield: voluntarily give up the CPU to another thread
+void lwp_yield(void){
+    ensure_scheduler();
+    if(!current) return;
+
+    thread old  = current;
+    thread next = cur_sched ? cur_sched->next() : NULL;
+
+    if(!next){
+        // Nobody else ready.
+        if(old == scheduler_main){
+            // We're already in scheduler_main; nothing to run -> just return.
+            return;
+        }
+        if(!LWPTERMINATED(old->status)){
+            // Old thread is still live: yield is a no-op; keep running old.
+            return;
+        }
+        // Old thread is terminated and no one else is runnable -> back to scheduler_main.
+        if(scheduler_main){
+            current = scheduler_main;
+            swap_rfiles(&old->state, &scheduler_main->state);
+        }
+        return;
+    }
+
+
+    // Re-admit old only if it's live AND not the scheduler_main
+    if(old != scheduler_main && !LWPTERMINATED(old->status) && cur_sched->admit){
+        cur_sched->admit(old);
+    }
+
+    current = next;
+    swap_rfiles(&old->state, &current->state);
+}
+
+// Start the LWP system by capturing the current thread as scheduler_main
+void lwp_start(void){
+    if(scheduler_main) return;
+    ensure_scheduler();
+
+    scheduler_main = (thread)calloc(1, sizeof(*scheduler_main));
+    if(!scheduler_main) return;
+    scheduler_main->tid    = next_tid++;
+    scheduler_main->status = MKTERMSTAT(LWP_LIVE, 0);
+    add_thread_global(scheduler_main);
+
+    /* Capture the current system thread’s register file exactly once */
+    swap_rfiles(&scheduler_main->state, NULL);
+
+    current = scheduler_main;
+    lwp_yield();
+    /* ... */
+}
+
+// Wait: wait for any thread to terminate; return its TID and status
+// If no threads exist or are runnable, return NO_THREAD immediately.
+tid_t lwp_wait(int *status){
+    while(!term_head){
+        if(!cur_sched || cur_sched->qlen()==0) return NO_THREAD;  // nothing left to wait for
+        lwp_yield();
+    }
+
+    // Pop oldest terminated
+    thread t = term_dequeue();
+    tid_t tid = t->tid;
+
+    // Reap any other terminated threads while we're here
+    if(status) *status = t->status;
+
+    // Cleanup for real LWPs (not the captured scheduler_main)
+    if(t != scheduler_main){
+        if(t->stack && t->stacksize) munmap((void*)t->stack, t->stacksize);
+        remove_thread_global(t);
+        free(t);
+    }
+    return tid;
+}
+
+// Set the current scheduler, migrating threads as needed
+void lwp_set_scheduler(scheduler newsched){
+    ensure_scheduler();
+    scheduler old = cur_sched;
+    if(!newsched) newsched = rr_scheduler();
+    if(old == newsched) return;
+
+    // init new before migration
+    if(newsched->init) newsched->init();
+
+    // drain old q and admit into new q
+    if(old && old->next){
+        thread t;
+        while( (t = old->next()) ){
+            if(t != scheduler_main && !LWPTERMINATED(t->status) && newsched->admit){
+                newsched->admit(t);
+            }
+        }
+        if(old->shutdown) old->shutdown();
+    }
+
+    cur_sched = newsched;
+}
+
+// Get the current scheduler, initializing default if needed
+scheduler lwp_get_scheduler(void){
+  if(!cur_sched) cur_sched = rr_scheduler();
+  return cur_sched;
+}
