@@ -19,7 +19,7 @@ static thread all_threads = NULL;
 // enqueue onto terminated FIFO (oldest-first)
 static void term_enqueue(thread t){
     t->exited = NULL;
-    if(!term_tail){ term_head = term_tail = t; }
+    if(!term_head) term_head = term_tail = t;
     else { term_tail->exited = t; term_tail = t; }
 }
 
@@ -136,36 +136,20 @@ tid_t lwp_create(lwpfun f, void *arg){
 }
 
 // Exit: terminate the current thread
-void lwp_exit(int code) {
-    thread me = current;
 
-    // 1) mark terminated with low 8 bits
+void lwp_exit(int code){
+    thread me = current;
     me->status = MKTERMSTAT(LWP_TERM, code & 0xFF);
 
-    // 2) remove from scheduler if present
-    if (cur_sched && cur_sched->remove) {
-        cur_sched->remove(me);
-    }
+    if(cur_sched && cur_sched->remove) cur_sched->remove(me);
 
-    // 3) enqueue on terminated list (FIFO)
-    me->exited = NULL;
-    if (!term_head) {
-        term_head = term_tail = me;
-    } else {
-        term_tail->exited = me;
-        term_tail = me;
-    }
+    // use the helper so it's not "unused"
+    term_enqueue(me);
 
-    // 4) switch back to system thread so lwp_start() returns
     current = NULL;
     swap_rfiles(&me->state, &scheduler_main->state);
-
-    // never returns here
+    // never returns
 }
-
-
-
-
 
 // Get TID of current thread (or NO_THREAD if none)
 tid_t lwp_gettid(void){
