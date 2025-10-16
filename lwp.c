@@ -179,7 +179,9 @@ void lwp_yield(void){
 
 
     // Re-admit old only if it's live AND not the scheduler_main
-    if(old != scheduler_main && !LWPTERMINATED(old->status) && cur_sched->admit){
+    if(old != scheduler_main && 
+            !LWPTERMINATED(old->status) && 
+                cur_sched->admit){
         cur_sched->admit(old);
     }
 
@@ -210,7 +212,8 @@ void lwp_start(void){
 // If no threads exist or are runnable, return NO_THREAD immediately.
 tid_t lwp_wait(int *status){
     while(!term_head){
-        if(!cur_sched || cur_sched->qlen()==0) return NO_THREAD;  // nothing left to wait for
+        // nothing left to wait for
+        if(!cur_sched || cur_sched->qlen()==0) return NO_THREAD;
         lwp_yield();
     }
 
@@ -223,7 +226,8 @@ tid_t lwp_wait(int *status){
 
     // Cleanup for real LWPs (not the captured scheduler_main)
     if(t != scheduler_main){
-        if(t->stack && t->stacksize) munmap((void*)t->stack, t->stacksize);
+        if(t->stack && t->stacksize) 
+            munmap((void*)t->stack, t->stacksize);
         remove_thread_global(t);
         free(t);
     }
@@ -244,7 +248,9 @@ void lwp_set_scheduler(scheduler newsched){
     if(old && old->next){
         thread t;
         while( (t = old->next()) ){
-            if(t != scheduler_main && !LWPTERMINATED(t->status) && newsched->admit){
+            if(t != scheduler_main && 
+                    !LWPTERMINATED(t->status) && 
+                        newsched->admit){
                 newsched->admit(t);
             }
         }

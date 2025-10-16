@@ -19,13 +19,23 @@ static void rr_admit(thread t){
 static void rr_remove(thread t){
   node *p=NULL,*c=head;
   while(c){
-    if(c->t==t){ if(p)p->next=c->next; else head=c->next; if(c==tail) tail=p; free(c); return; }
+    if(c->t==t){ 
+      if(p)p->next=c->next; 
+      else head=c->next; 
+      if(c==tail) tail=p; 
+      free(c); 
+      return; }
     p=c; c=c->next;
   }
 }
 static thread rr_next(void){
   if(!head) return NULL;
-  node *n=head; head=head->next; if(!head) tail=NULL; thread t=n->t; free(n); return t;
+    node *n=head; 
+    head=head->next; 
+  if(!head) tail=NULL; 
+    thread t=n->t; 
+    free(n); 
+  return t;
 }
 static int rr_qlen(void){
   int k=0; for(node*p=head;p;p=p->next) k++; return k;
