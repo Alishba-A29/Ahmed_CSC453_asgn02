@@ -1,6 +1,6 @@
 # Makefile
 CC      ?= gcc
-CFLAGS  ?= -Wall -Wextra -Werror -fPIC -O2 -g
+CFLAGS  ?= -Wall -Wextra -Werror -fPIC -O2 -g -std=gnu99
 LDFLAGS ?= -shared
 INC     := -I.
 
