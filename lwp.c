@@ -162,14 +162,17 @@ void lwp_yield(void){
     if(!next){
         // Nobody else ready.
         if(old == scheduler_main){
-            // We're already in scheduler_main; nothing to run -> just return.
+            // We're already in scheduler_main; 
+            //nothing to run -> just return.
             return;
         }
         if(!LWPTERMINATED(old->status)){
-            // Old thread is still live: yield is a no-op; keep running old.
+            // Old thread is still live: yield is a no-op; 
+            // keep running old.
             return;
         }
-        // Old thread is terminated and no one else is runnable -> back to scheduler_main.
+        // Old thread is terminated and no one else is 
+        // runnable -> back to scheduler_main.
         if(scheduler_main){
             current = scheduler_main;
             swap_rfiles(&old->state, &scheduler_main->state);
@@ -178,7 +181,8 @@ void lwp_yield(void){
     }
 
 
-    // Re-admit old only if it's live AND not the scheduler_main
+    // Re-admit old only if it's live 
+    // AND not the scheduler_main
     if(old != scheduler_main && 
             !LWPTERMINATED(old->status) && 
                 cur_sched->admit){
@@ -208,8 +212,10 @@ void lwp_start(void){
     /* ... */
 }
 
-// Wait: wait for any thread to terminate; return its TID and status
-// If no threads exist or are runnable, return NO_THREAD immediately.
+// Wait: wait for any thread to terminate; 
+// return its TID and status
+// If no threads exist or are runnable, 
+// return NO_THREAD immediately.
 tid_t lwp_wait(int *status){
     while(!term_head){
         // nothing left to wait for
