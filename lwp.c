@@ -121,8 +121,8 @@ tid_t lwp_create(lwpfun f, void *arg){
     uintptr_t rsp = (top - 8) & ~(uintptr_t)0xFUL;           // 16B-aligned
 
     *(unsigned long*)rsp = (unsigned long)lwp_trampoline;    // retaddr
-    t->state.rsp = rsp;                                      // saved %rsp (16B aligned)
-    t->state.rbp = rsp - 8;                                  // plausible, aligned %rbp
+    t->state.rsp = rsp;          // saved %rsp (16B)
+    t->state.rbp = rsp - 8;     // plausible, aligned %rbp
 
     // Add to global list and admit to scheduler
     add_thread_global(t);
