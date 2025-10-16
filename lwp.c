@@ -16,6 +16,14 @@ static thread scheduler_main = NULL;   // never admitted to RR queue
 static thread term_head = NULL, term_tail = NULL;
 static thread all_threads = NULL;
 
+// enqueue onto terminated FIFO (oldest-first)
+static void term_enqueue(thread t){
+    t->exited = NULL;
+    if(!term_tail){ term_head = term_tail = t; }
+    else { term_tail->exited = t; term_tail = t; }
+}
+
+
 static thread term_dequeue(void){
     if(!term_head) return NULL;
     thread t = term_head;
@@ -129,14 +137,13 @@ tid_t lwp_create(lwpfun f, void *arg){
 // Exit: terminate the current thread
 void lwp_exit(int status){
   thread me = current;
-
-  // Safety check: if no current thread, just return
   me->status = MKTERMSTAT(LWP_TERM, status);
 
-  // Enqueue on terminated list for lwp_wait()
+  // Remove from scheduler (if not system thread)
+  term_enqueue(me);
+
   thread next = NULL;
-  if (cur_sched && cur_sched->next)
-    next = cur_sched->next();
+  if (cur_sched && cur_sched->next) next = cur_sched->next();
 
   if (!next) {
     current = scheduler_main;
@@ -146,6 +153,7 @@ void lwp_exit(int status){
     swap_rfiles(&me->state, &next->state);
   }
 }
+
 
 
 
