@@ -168,7 +168,9 @@ void lwp_yield(void){
         - it's not the system thread,
         - it's still live (not exiting),
         - and the scheduler did not choose 'old' to run again right now. */
-  if (old && old != scheduler_main && !LWPTERMINATED(old->status) && next != old) {
+  if (old && old != scheduler_main 
+            && !LWPTERMINATED(old->status) 
+            && next != old) {
     if (cur_sched->admit) cur_sched->admit(old);
   }
 
