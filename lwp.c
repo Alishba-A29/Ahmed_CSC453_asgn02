@@ -136,20 +136,36 @@ tid_t lwp_create(lwpfun f, void *arg){
 }
 
 // Exit: terminate the current thread
-
-void lwp_exit(int code){
+void lwp_exit(int code) {
     thread me = current;
+
+    // Mark terminated (keep only low 8 bits as your tests expect)
     me->status = MKTERMSTAT(LWP_TERM, code & 0xFF);
 
-    if(cur_sched && cur_sched->remove) cur_sched->remove(me);
+    // Make sure it's not in the ready queue anymore
+    if (cur_sched && cur_sched->remove) cur_sched->remove(me);
 
+    // Put onto the terminated list so lwp_wait() can see it
     term_enqueue(me);
 
-    // hand control straight back to the system thread
-    current = scheduler_main;
-    swap_rfiles(&me->state, &scheduler_main->state);
-    // never returns
+    // Pick the next runnable thread
+    thread next = NULL;
+    if (cur_sched && cur_sched->next)
+        next = cur_sched->next();
+
+    if (next) {
+        // Keep running LWPs; don't go back to system thread yet
+        current = next;
+        swap_rfiles(&me->state, &next->state);
+    } else {
+        // No runnable LWPs; return to system thread to let main reap
+        current = scheduler_main;
+        swap_rfiles(&me->state, &scheduler_main->state);
+    }
+
+    // no return
 }
+
 
 
 // Get TID of current thread (or NO_THREAD if none)
