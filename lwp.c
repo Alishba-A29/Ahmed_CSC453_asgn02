@@ -136,24 +136,33 @@ tid_t lwp_create(lwpfun f, void *arg){
 }
 
 // Exit: terminate the current thread
-void lwp_exit(int status){
-  thread me = current;
-  me->status = MKTERMSTAT(LWP_TERM, status);
+void lwp_exit(int code) {
+    thread me = current;
 
-  // Remove from scheduler (if not system thread)
-  term_enqueue(me);
+    // 1) mark terminated with low 8 bits
+    me->status = MKTERMSTAT(LWP_TERM, code & 0xFF);
 
-  thread next = NULL;
-  if (cur_sched && cur_sched->next) next = cur_sched->next();
+    // 2) remove from scheduler if present
+    if (cur_sched && cur_sched->remove) {
+        cur_sched->remove(me);
+    }
 
-  if (!next) {
-    current = scheduler_main;
+    // 3) enqueue on terminated list (FIFO)
+    me->exited = NULL;
+    if (!term_head) {
+        term_head = term_tail = me;
+    } else {
+        term_tail->exited = me;
+        term_tail = me;
+    }
+
+    // 4) switch back to system thread so lwp_start() returns
+    current = NULL;
     swap_rfiles(&me->state, &scheduler_main->state);
-  } else {
-    current = next;
-    swap_rfiles(&me->state, &next->state);
-  }
+
+    // never returns here
 }
+
 
 
 
