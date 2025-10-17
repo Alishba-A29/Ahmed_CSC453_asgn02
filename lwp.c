@@ -9,7 +9,7 @@
 
 // Global state
 typedef struct glnode { thread t; struct glnode *next; } glnode;
-static int notify_main_pending = 0;
+//static int notify_main_pending = 0;
 static int notify_main_count = 0;
 static scheduler cur_sched = NULL;   // current scheduler
 static thread    current   = NULL;
