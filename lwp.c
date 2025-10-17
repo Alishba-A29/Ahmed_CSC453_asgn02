@@ -119,15 +119,14 @@ tid_t lwp_create(lwpfun f, void *arg){
     uintptr_t top = (uintptr_t)t->stack + t->stacksize;
     uintptr_t frame = (top - 16) & ~(uintptr_t)0xFUL;   // 16B aligned frame base
 
-    // Fake frame: [frame + 0] = saved RBP (0 ok), [frame + 8] = return address
-    *(uintptr_t*)(frame + 0) = 0;                       // old RBP
+    *(uintptr_t*)(frame + 0) = 0;
     *(uintptr_t*)(frame + 8) = (uintptr_t)lwp_trampoline;
 
     // Set registers so that `leave; ret` lands in lwp_trampoline
     t->state.rbp = frame;
     t->state.rsp = frame;
-    t->state.rdi = (uintptr_t)f;                        // arg1 to trampoline
-    t->state.rsi = (uintptr_t)arg;                      // arg2 to trampoline
+    t->state.rdi = (uintptr_t)f;
+    t->state.rsi = (uintptr_t)arg;
 
 
     // Add to global list and admit to scheduler
@@ -157,8 +156,8 @@ void lwp_exit(int code){
     // If someone is waiting, hand this exiting thread directly to the oldest waiter
     thread waiter = wait_dequeue();
     if (waiter) {
-        waiter->exited = me;            // pair result to this waiter
-        if (cur_sched && cur_sched->admit) cur_sched->admit(waiter); // wake it
+        waiter->exited = me;
+        if (cur_sched && cur_sched->admit) cur_sched->admit(waiter);
     } else {
         // No waiters yet → enqueue onto terminated FIFO (oldest-first)
         me->lib_two = NULL;
@@ -293,11 +292,11 @@ tid_t lwp_wait(int *status){
         // resumed here when a worker admits us back (rare case)
     }
 
-    // 4) We were awakened. The exiting thread paired to us is in current->exited.
+    // 4) We were awakened. 
     thread dead = waiter->exited;
     waiter->exited = NULL;
 
-    // If a racer admitted us before anyone exited (shouldn't happen), fall back
+    // If a racer admitted us before anyone exited
     if (!dead){
         // Try again (now there might be something in term_head)
         return lwp_wait(status);
@@ -308,7 +307,8 @@ tid_t lwp_wait(int *status){
     if ((size_t)tid < tidcap) tidtab[tid] = NULL;
 
     if (dead != scheduler_main) {
-        if (dead->stack && dead->stacksize) munmap((void*)dead->stack, dead->stacksize);
+        if (dead->stack && dead->stacksize) 
+        munmap((void*)dead->stack, dead->stacksize);
         free(dead);
     }
 
