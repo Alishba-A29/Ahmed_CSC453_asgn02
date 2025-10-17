@@ -199,8 +199,6 @@ void lwp_yield(void){
         _exit(code);
     }
 
-    // If the scheduler returned the same thread and there is nobody else queued,
-    // we would just spin. End the world with main's status instead.
     if (old && next == old) {
         int q = cur_sched->qlen ? cur_sched->qlen() : 0;
         if (q == 0) {
