@@ -59,22 +59,22 @@ static void ensure_scheduler(void){
 
 // Find thread by TID
 thread tid2thread(tid_t tid){
-    // Only positive user-created tids are valid
+    // Only positive, user-created tids are valid
     if (tid <= 0) return NULL;
 
-    if ((size_t)tid >= tidcap) return NULL;
+    // If the requested tid hasn't been issued yet, it's definitely bogus
+    if ((size_t)tid >= (size_t)next_tid) return NULL;
 
+    // If slot isn't allocated or was cleared on final free, it's bogus
+    if ((size_t)tid >= tidcap) return NULL;
     thread t = tidtab[tid];
-    // If we ever cleared the slot (freed or never used), return NULL
     if (!t) return NULL;
 
-    // Optional extra sanity: ensure the record’s tid matches the index
+    // Final sanity: returned record must still identify itself as 'tid'
     if (t->tid != tid) return NULL;
 
     return t;
 }
-
-
 
 // Trampoline function for new LWPs
 static void lwp_trampoline(lwpfun f, void *arg){
@@ -190,28 +190,37 @@ tid_t lwp_gettid(void){
 }
 
 // Yield: voluntarily give up the CPU to another thread
-#include <unistd.h>
-
 void lwp_yield(void){
     ensure_scheduler();
     if (!cur_sched || !cur_sched->next) return;
 
     thread old  = current;
-    thread next = cur_sched->next();
+    thread next = cur_sched->next();   // scheduler picks who should run
 
-    // If nobody is runnable, drain & exit with main's 8-bit status
+    // No runnable LWPs at all -> drain & exit with main's 8-bit status
     if (!next) {
         int code = LWPTERMSTAT(scheduler_main ? scheduler_main->status : 0);
         _exit(code);
     }
 
+    // If scheduler returned the same thread, avoid self-switch.
+    // Try once more to get someone else if the queue isn't empty.
     if (old && next == old) {
         int q = cur_sched->qlen ? cur_sched->qlen() : 0;
+
         if (q == 0) {
+            // Truly alone -> process is done
             int code = LWPTERMSTAT(scheduler_main ? scheduler_main->status : 0);
             _exit(code);
         }
+
+        if (!LWPTERMINATED(old->status) && cur_sched->admit) {
+            cur_sched->admit(old);
+        }
+        return;  // no-op yield to avoid swap_rfiles(&old,&old)
     }
+
+    // Normal path: re-admit the yielding thread *after* picking next
     if (old && !LWPTERMINATED(old->status) && cur_sched->admit) {
         cur_sched->admit(old);
     }
