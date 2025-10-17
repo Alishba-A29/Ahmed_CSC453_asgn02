@@ -168,8 +168,9 @@ void lwp_yield(void){
   if (cur_sched && cur_sched->next)
     next = cur_sched->next();
 
-  // 2) Re-admit 'old' if it's a live non-system thread and we aren't reselecting it
-  if (old && old != scheduler_main && !LWPTERMINATED(old->status) && next != old) {
+  if (old && old != scheduler_main 
+    && !LWPTERMINATED(old->status) 
+    && next != old) {
     if (cur_sched->admit) cur_sched->admit(old);
   }
 
