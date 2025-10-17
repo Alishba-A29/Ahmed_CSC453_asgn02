@@ -163,29 +163,31 @@ tid_t lwp_gettid(void){
 // Yield: voluntarily give up the CPU to another thread
 void lwp_yield(void){
   ensure_scheduler();
-
   thread old  = current ? current : scheduler_main;
 
+  /* Get next runnable */
   thread next = NULL;
   if (cur_sched && cur_sched->next) next = cur_sched->next();
 
+  if (old && old != scheduler_main &&
+      !LWPTERMINATED(old->status) &&
+      next != old) {
+    if (cur_sched && cur_sched->admit) cur_sched->admit(old);
+  }
+
   if (!next) {
-    if (old != scheduler_main) {
-      current = scheduler_main;
-      swap_rfiles(&old->state, &scheduler_main->state);
-    }
+    current = scheduler_main;
+    swap_rfiles(&old->state, &scheduler_main->state);
     return;
   }
 
   if (next == old) return;
 
-  if (old && old != scheduler_main && !LWPTERMINATED(old->status)) {
-    if (cur_sched->admit) cur_sched->admit(old);
-  }
-
   current = next;
   swap_rfiles(&old->state, &next->state);
 }
+
+
 
 
 // Start the LWP system by capturing the current thread as scheduler_main
@@ -239,7 +241,9 @@ void lwp_set_scheduler(scheduler newsched) {
   if (cur_sched) {
     for (glnode *n = ghead; n; n = n->next) {
       thread p = n->t;
-      if (!p || p == scheduler_main || p == current) continue;
+      if (!p) continue;
+      if (p == scheduler_main) continue;
+      if (p == current)        continue;
       if (LWPTERMINATED(p->status)) continue;
 
       if (cur_sched->remove) cur_sched->remove(p);
@@ -250,11 +254,11 @@ void lwp_set_scheduler(scheduler newsched) {
 
   cur_sched = newsched;
 
-  // Let the new scheduler pick someone if we're at the system thread.
   if (!current || current == scheduler_main) {
     lwp_yield();
   }
 }
+
 
 // Get the current scheduler, initializing default if needed
 scheduler lwp_get_scheduler(void){
