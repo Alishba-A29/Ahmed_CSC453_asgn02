@@ -9,7 +9,7 @@
 
 // Global state
 typedef struct glnode { thread t; struct glnode *next; } glnode;
-static int wake_main_once = 0;
+//static int wake_main_once = 0;
 static scheduler cur_sched = NULL;   // current scheduler
 static thread    current   = NULL;
 static tid_t     next_tid  = 1;
@@ -161,24 +161,24 @@ void lwp_exit(int code){
     if(!me) return;
 
     me->status = MKTERMSTAT(LWP_TERM, code & 0xFF);
+
     if (cur_sched && cur_sched->remove) cur_sched->remove(me);
     if (me != scheduler_main) term_enqueue(me);
 
-    // If someone else is runnable, run them once, *then* wake main.
+    // Prefer to keep the RR going if others are runnable.
     thread next = (cur_sched && cur_sched->next) ? cur_sched->next() : NULL;
-    if(next){
-        wake_main_once = 1;
-        current = next;
-        swap_rfiles(&me->state, &next->state);
-        return;                             // not expected to resume here
-    }
 
-    // Otherwise, no one runnable: go straight to main if it exists.
-    if(scheduler_main){
+    if(next){
+        current = next;
+        swap_rfiles(&me->state, &next->state);   // does not return
+    } else if(scheduler_main){
         current = scheduler_main;
-        swap_rfiles(&me->state, &scheduler_main->state);
+        swap_rfiles(&me->state, &scheduler_main->state); // does not return
+    } else {
+        // Nothing to run and no main captured yet; just return.
     }
 }
+
 
 
 
@@ -192,20 +192,15 @@ tid_t lwp_gettid(void){
 void lwp_yield(void){
     ensure_scheduler();
 
-    // create scheduler_main on demand (keep your existing code)
-    if(!scheduler_main){ /* ... */ }
-
-    thread old = current ? current : scheduler_main;
-
-    // If we owe main a turn, bounce to it *now*.
-    if(wake_main_once && old != scheduler_main){
-        wake_main_once = 0;
-        current = scheduler_main;
-        swap_rfiles(&old->state, &scheduler_main->state);
-        return;
+    if(!scheduler_main){
+        scheduler_main = (thread)calloc(1, sizeof(*scheduler_main));
+        if(!scheduler_main) return;
+        scheduler_main->tid    = next_tid++;
+        scheduler_main->status = MKTERMSTAT(LWP_LIVE, 0);
+        add_thread_global(scheduler_main);
     }
 
-    // ... then do your usual next()/re-admit logic ...
+    thread old  = current ? current : scheduler_main;
     thread next = (cur_sched && cur_sched->next) ? cur_sched->next() : NULL;
 
     if(!next){
@@ -220,11 +215,10 @@ void lwp_yield(void){
     && cur_sched->admit){
         cur_sched->admit(old);
     }
+
     current = next;
     swap_rfiles(&old->state, &current->state);
 }
-
-
 
 // Start: begin scheduling threads
 void lwp_start(void){
