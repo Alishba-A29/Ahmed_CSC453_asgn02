@@ -116,13 +116,15 @@ tid_t lwp_create(lwpfun f, void *arg){
     // So the saved %rsp itself must be 16B aligned, and the slot at [%rsp]
     // must contain the non-zero return address (lwp_trampoline).
     // Top of stack, 16B-align a frame base:
-    uintptr_t top = (uintptr_t)t->stack + t->stacksize;
-    uintptr_t frame = (top - 16) & ~(uintptr_t)0xFUL;
+    uintptr_t top   = (uintptr_t)t->stack + t->stacksize;
+    // Make a 16B-aligned base, then offset by +8 so frame % 16 == 8
+    uintptr_t frame = ((top - 24) & ~(uintptr_t)0xFUL) + 8;
 
+    // Fake frame: [frame+0] = saved RBP, [frame+8] = return address
     *(uintptr_t*)(frame + 0) = 0;
     *(uintptr_t*)(frame + 8) = (uintptr_t)lwp_trampoline;
 
-    // Set registers so that `leave; ret` lands in lwp_trampoline
+    // Registers so that "leave; ret" jumps into lwp_trampoline(f,arg)
     t->state.rbp = frame;
     t->state.rsp = frame;
     t->state.rdi = (uintptr_t)f;
@@ -186,25 +188,30 @@ tid_t lwp_gettid(void){
 
 void lwp_yield(void){
     ensure_scheduler();
-
-    // Re-admit the currently running thread if it's still live.
-    // This works whether current is a worker or scheduler_main.
-    if (current && cur_sched 
-            && cur_sched->admit 
-            && !LWPTERMINATED(current->status)) {
-        cur_sched->admit(current);
-    }
-
     if (!cur_sched || !cur_sched->next) return;
 
+    thread old  = current;
     thread next = cur_sched->next();
+
+    // If nobody is runnable, drain & exit with main's 8-bit status
     if (!next) {
-        // No runnable LWPs remain -> exit with main's 8-bit status
         int code = LWPTERMSTAT(scheduler_main ? scheduler_main->status : 0);
         _exit(code);
     }
 
-    thread old = current;
+    // If the scheduler returned the same thread and there is nobody else queued,
+    // we would just spin. End the world with main's status instead.
+    if (old && next == old) {
+        int q = cur_sched->qlen ? cur_sched->qlen() : 0;
+        if (q == 0) {
+            int code = LWPTERMSTAT(scheduler_main ? scheduler_main->status : 0);
+            _exit(code);
+        }
+    }
+    if (old && !LWPTERMINATED(old->status) && cur_sched->admit) {
+        cur_sched->admit(old);
+    }
+
     current = next;
     swap_rfiles(&old->state, &next->state);
 }
