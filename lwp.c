@@ -182,66 +182,63 @@ tid_t lwp_gettid(void){
 }
 
 // Yield: voluntarily give up the CPU to another thread
+#include <unistd.h>
+
 void lwp_yield(void){
     ensure_scheduler();
 
-    if (current && current != scheduler_main) {
-        thread old = current;
-
-        // Re-queue the worker if it hasn't terminated
-        if (!LWPTERMINATED(old->status) && cur_sched && cur_sched->admit) {
-            cur_sched->admit(old);
-        }
-
-        // Hand control back to main
-        if (scheduler_main) {
-            current = scheduler_main;
-            swap_rfiles(&old->state, &scheduler_main->state);
-        }
-        return;
+    // Re-admit the currently running thread if it's still live.
+    // This works whether current is a worker or scheduler_main.
+    if (current && cur_sched 
+            && cur_sched->admit 
+            && !LWPTERMINATED(current->status)) {
+        cur_sched->admit(current);
     }
 
-    if (!cur_sched || !cur_sched->next) {
-        // No scheduler: nothing to do
-        return;
-    }
+    if (!cur_sched || !cur_sched->next) return;
 
-    // Ask scheduler for the next runnable LWP
     thread next = cur_sched->next();
-
     if (!next) {
-        // No runnable LWPs remain → terminate the process with main's status.
+        // No runnable LWPs remain -> exit with main's 8-bit status
         int code = LWPTERMSTAT(scheduler_main ? scheduler_main->status : 0);
-        _exit(code);  // do not return
+        _exit(code);
     }
 
-    // Switch from main to the next runnable LWP
-    thread old = scheduler_main;
+    thread old = current;
     current = next;
     swap_rfiles(&old->state, &next->state);
 }
+
 
 // Start the LWP system by capturing the current thread as scheduler_main
 void lwp_start(void){
     if (scheduler_main) return;
 
-    // Ensure there is a scheduler (default RR is fine)
-    if (!cur_sched) cur_sched = lwp_get_scheduler();
+    // Ensure default scheduler exists AND is initted
+    ensure_scheduler();
 
-    // Create the scheduler_main thread
+    // Turn the caller (system thread) into an LWP (no stack mapping!)
     scheduler_main = (thread)calloc(1, sizeof(*scheduler_main));
     if (!scheduler_main) _exit(3);
 
-    scheduler_main->tid    = 0;
-    scheduler_main->status = MKTERMSTAT(LWP_LIVE, 0);
+    scheduler_main->tid       = 0;
+    scheduler_main->stack     = NULL;
+    scheduler_main->stacksize = 0;
+    scheduler_main->status    = MKTERMSTAT(LWP_LIVE, 0);
 
+    // Save the current CPU state into scheduler_main so it can be scheduled
+    swap_rfiles(&scheduler_main->state, NULL);
+    current = scheduler_main;
+
+    // Register in the tid table
     ensure_tidcap(0);
     tidtab[0] = scheduler_main;
 
-    swap_rfiles(&scheduler_main->state, NULL);
-
-    current = scheduler_main;
+    // *** Admit main to the ready queue and immediately yield ***
+    if (cur_sched && cur_sched->admit) cur_sched->admit(scheduler_main);
+    lwp_yield();
 }
+
 
 
 
