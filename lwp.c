@@ -17,11 +17,11 @@ static thread term_head = NULL, term_tail = NULL;
 static thread all_threads = NULL;
 
 // enqueue onto terminated FIFO (oldest-first)
-// static void term_enqueue(thread t){
-//     t->exited = NULL;
-//     if(!term_head) term_head = term_tail = t;
-//     else { term_tail->exited = t; term_tail = t; }
-// }
+static void term_enqueue(thread t){
+    t->exited = NULL;
+    if(!term_head) term_head = term_tail = t;
+    else { term_tail->exited = t; term_tail = t; }
+}
 
 
 static thread term_dequeue(void){
@@ -136,32 +136,27 @@ tid_t lwp_create(lwpfun f, void *arg){
 }
 
 // Exit: terminate the current thread
-void lwp_exit(int code) {
+void lwp_exit(int code){
     thread me = current;
 
-    // 1) mark terminated with low 8 bits
     me->status = MKTERMSTAT(LWP_TERM, code & 0xFF);
 
-    // 2) remove from scheduler if present
-    if (cur_sched && cur_sched->remove) {
-        cur_sched->remove(me);
-    }
+    if (cur_sched && cur_sched->remove) cur_sched->remove(me);
+    term_enqueue(me);
 
-    // 3) enqueue on terminated list (FIFO)
-    me->exited = NULL;
-    if (!term_head) {
-        term_head = term_tail = me;
+    thread next = NULL;
+    if (cur_sched && cur_sched->next) next = cur_sched->next();
+
+    if (next) {
+        current = next;
+        swap_rfiles(&me->state, &next->state);
+        /* no return */
     } else {
-        term_tail->exited = me;
-        term_tail = me;
+        exit(LWPTERMSTAT(me->status));
+        /* no return */
     }
-
-    // 4) switch back to system thread so lwp_start() returns
-    current = NULL;
-    swap_rfiles(&me->state, &scheduler_main->state);
-
-    // never returns here
 }
+
 
 
 
@@ -174,86 +169,74 @@ tid_t lwp_gettid(void){
 
 // Yield: voluntarily give up the CPU to another thread
 void lwp_yield(void){
-  ensure_scheduler();
-  thread old = current;
+    ensure_scheduler();
 
-  // 1) Ask scheduler for next thread to run
-  thread next = NULL;
-  if (cur_sched && cur_sched->next)
-    next = cur_sched->next();
+    thread old  = current;
+    thread next = NULL;
+    if (cur_sched && cur_sched->next) next = cur_sched->next();
 
-  /* 2) Re-admit 'old' ONLY if:
-        - it's not the system thread,
-        - it's still live (not exiting),
-        - and the scheduler did not choose 'old' to run again right now. */
-  if (old && old != scheduler_main 
-            && !LWPTERMINATED(old->status) 
-            && next != old) {
-    if (cur_sched->admit) cur_sched->admit(old);
-  }
+    if (old && !LWPTERMINATED(old->status) && next != old) {
+        if (cur_sched->admit) cur_sched->admit(old);
+    }
 
-  // 3) If no next thread, run the system thread
-  if (!next) {
-    current = scheduler_main;
-    swap_rfiles(&old->state, &scheduler_main->state);
-    return;
-  }
+    if (!next) {
+        int code = LWPTERMSTAT(old ? old->status : 0);
+        exit(code);
+    }
 
-  // 4) If next is old, no context switch needed
-  if (next == old) return;
+    if (next == old) return;
 
-  // 5) Context switch to 'next'
-  current = next;
-  swap_rfiles(&old->state, &next->state);
+    current = next;
+    swap_rfiles(&old->state, &next->state);
 }
+
 
 
 
 // Start the LWP system by capturing the current thread as scheduler_main
 void lwp_start(void){
-    if(scheduler_main) return;
+    if (scheduler_main) return;
     ensure_scheduler();
 
     scheduler_main = (thread)calloc(1, sizeof(*scheduler_main));
-    if(!scheduler_main) return;
+    if (!scheduler_main) return;
+
     scheduler_main->tid    = next_tid++;
     scheduler_main->status = MKTERMSTAT(LWP_LIVE, 0);
     add_thread_global(scheduler_main);
 
-    //
+    // Save the current context of the system thread
     swap_rfiles(&scheduler_main->state, NULL);
+
+    if (cur_sched && cur_sched->admit) cur_sched->admit(scheduler_main);
 
     current = scheduler_main;
     lwp_yield();
 }
 
+
 // Wait: wait for any thread to terminate; 
-// return its TID and status
-// If no threads exist or are runnable, 
-// return NO_THREAD immediately.
 tid_t lwp_wait(int *status){
-    while(!term_head){
-        // nothing left to wait for
-        if(!cur_sched || cur_sched->qlen()==0) return NO_THREAD;
+    // Wait until something appears on the terminated queue
+    while (!term_head) {
+        // then no thread can ever terminate; give up.
+        if (!cur_sched || cur_sched->qlen() <= 1) return NO_THREAD;
         lwp_yield();
     }
 
-    // Pop oldest terminated
-    thread t = term_dequeue();
-    tid_t tid = t->tid;
+    thread t   = term_dequeue();
+    tid_t  tid = t->tid;
+    if (status) *status = t->status;
 
-    // Reap any other terminated threads while we're here
-    if(status) *status = t->status;
-
-    // Cleanup for real LWPs (not the captured scheduler_main)
-    if(t != scheduler_main){
-        if(t->stack && t->stacksize) 
-            munmap((void*)t->stack, t->stacksize);
-        remove_thread_global(t);
+    // free stacks/resources for real LWPs (never free scheduler_main here)
+    if (t != scheduler_main) {
+        if (t->stack && t->stacksize) munmap((void*)t->stack, t->stacksize);
+        remove_thread_global(t);            // if you keep a global list
         free(t);
     }
     return tid;
 }
+
 
 // Set the current scheduler, migrating threads as needed
 void lwp_set_scheduler(scheduler newsched) {
