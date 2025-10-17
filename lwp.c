@@ -195,32 +195,36 @@ void lwp_yield(void){
     if (!cur_sched || !cur_sched->next) return;
 
     thread old  = current;
-    thread next = cur_sched->next();   // scheduler picks who should run
+    thread next = cur_sched->next();   // 1st pick
 
-    // No runnable LWPs at all -> drain & exit with main's 8-bit status
+    // If nobody runnable at all -> drain & exit with main's 8-bit status
     if (!next) {
         int code = LWPTERMSTAT(scheduler_main ? scheduler_main->status : 0);
         _exit(code);
     }
 
-    // If scheduler returned the same thread, avoid self-switch.
-    // Try once more to get someone else if the queue isn't empty.
+    // If scheduler gave us the same thread but others exist, try once more
     if (old && next == old) {
         int q = cur_sched->qlen ? cur_sched->qlen() : 0;
 
-        if (q == 0) {
-            // Truly alone -> process is done
+        if (q == 0) {  // truly alone
             int code = LWPTERMSTAT(scheduler_main ? scheduler_main->status : 0);
             _exit(code);
         }
 
-        if (!LWPTERMINATED(old->status) && cur_sched->admit) {
+        // Try again to get a different runnable thread BEFORE re-admitting 'old'
+        thread alt = cur_sched->next();
+        if (alt && alt != old) {
+            next = alt;  // switch to someone else; do not re-admit 'old' yet
+        } else {
+            if (!LWPTERMINATED(old->status) 
+                && cur_sched->admit) 
             cur_sched->admit(old);
+            return;
         }
-        return;  // no-op yield to avoid swap_rfiles(&old,&old)
     }
 
-    // Normal path: re-admit the yielding thread *after* picking next
+    // Normal path: re-admit the yielding thread AFTER choosing who we’ll run
     if (old && !LWPTERMINATED(old->status) && cur_sched->admit) {
         cur_sched->admit(old);
     }
