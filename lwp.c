@@ -160,31 +160,28 @@ tid_t lwp_gettid(void){
 // Yield: voluntarily give up the CPU to another thread
 void lwp_yield(void){
   ensure_scheduler();
+  thread old  = current ? current : scheduler_main;
 
-  thread old = current ? current : scheduler_main;
-
-  // 1) Ask scheduler for next thread to run
+  // Ask for next
   thread next = NULL;
   if (cur_sched && cur_sched->next)
     next = cur_sched->next();
 
-  if (old && old != scheduler_main 
-    && !LWPTERMINATED(old->status) 
-    && next != old) {
+  if (old && old != scheduler_main
+      && !LWPTERMINATED(old->status)
+      && old->lib_two == (void*)2
+      && next != old) {
     if (cur_sched->admit) cur_sched->admit(old);
   }
 
-  // 3) If no next thread, run the system thread
   if (!next) {
     current = scheduler_main;
     swap_rfiles(&old->state, &scheduler_main->state);
     return;
   }
 
-  // 4) If next is old, no context switch needed
   if (next == old) return;
 
-  // 5) Context switch
   current = next;
   swap_rfiles(&old->state, &next->state);
 }
@@ -199,9 +196,7 @@ void lwp_start(void){
     if(!scheduler_main) return;
     scheduler_main->tid    = next_tid++;
     scheduler_main->status = MKTERMSTAT(LWP_LIVE, 0);
-    add_thread_global(scheduler_main);
 
-    //
     swap_rfiles(&scheduler_main->state, NULL);
 
     current = scheduler_main;
@@ -209,9 +204,6 @@ void lwp_start(void){
 }
 
 // Wait: wait for any thread to terminate; 
-// return its TID and status
-// If no threads exist or are runnable, 
-// return NO_THREAD immediately.
 tid_t lwp_wait(int *status){
     while(!term_head){
         // nothing left to wait for
@@ -241,25 +233,27 @@ void lwp_set_scheduler(scheduler newsched) {
   if (!newsched) newsched = rr_scheduler();
   if (newsched == cur_sched) return;
 
-  // 1) Init new scheduler
   if (newsched->init) newsched->init();
 
-  //  2) Migrate all live threads (except current)
   if (cur_sched) {
+    // Migrate all live threads (not the system thread; not terminated)
     for (thread p = all_threads; p; p = p->lib_one) {
       if (p == current) continue;
       if (LWPTERMINATED(p->status)) continue;
-      if (cur_sched->remove) cur_sched->remove(p);
-      if (newsched->admit)  newsched->admit(p);
-    }
 
-    // 3) Shutdown old scheduler
+      if (newsched->admit)  newsched->admit(p);
+      if (cur_sched->remove) cur_sched->remove(p);
+    }
     if (cur_sched->shutdown) cur_sched->shutdown();
   }
 
-  // 4) Switch
   cur_sched = newsched;
+
+  if (!current || current == scheduler_main) {
+    lwp_yield();
+  }
 }
+
 
 
 
