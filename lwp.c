@@ -131,13 +131,19 @@ tid_t lwp_create(lwpfun f, void *arg){
     memcpy(&t->state.fxsave, &FPU_INIT_CONST, sizeof t->state.fxsave);
 
     // Build boot frame for magic64.S (leave; ret)
-    uintptr_t top   = (uintptr_t)t->stack + t->stacksize;
-    uintptr_t frame = (top - 16) & ~(uintptr_t)0xFUL;
+    // Build boot frame for magic64.S (leave; ret) with correct ABI alignment
+    uintptr_t top    = (uintptr_t)t->stack + t->stacksize;
+    /* Pick a 16B-aligned base well inside the mapping, then add +8 so:
+    - after 'leave':  rsp = frame+8  => %16 == 0
+    - after 'ret'  :  rsp = frame+16 => %16 == 8  (ABI on function entry) */
+    uintptr_t frame  = ((top - 24) & ~(uintptr_t)0xFUL) + 8;
+
     *(unsigned long *)(frame + 0) = 0UL;
     *(unsigned long *)(frame + 8) = (unsigned long)(uintptr_t)lwp_trampoline;
 
     t->state.rbp = frame;   // 'leave' uses this
     t->state.rsp = frame;   // 'ret' pops trampoline
+
 
     // Register thread and admit to scheduler
     add_thread_global(t);
@@ -155,13 +161,15 @@ void lwp_exit(int code){
 
     me->status = MKTERMSTAT(LWP_TERM, code & 0xFF);
 
-    if (cur_sched && cur_sched->remove) 
-        cur_sched->remove(me);
+    // Ensure the exiting thread is not left in any run queue
+    if (cur_sched && cur_sched->remove) cur_sched->remove(me);
+
     if (me != scheduler_main) term_enqueue(me);
 
-    lwp_yield();
+    lwp_yield();  // hand off (or return to scheduler_main)
     // not expected to resume here
 }
+
 
 // Get TID of current thread (or NO_THREAD if none)
 tid_t lwp_gettid(void){
@@ -232,10 +240,8 @@ void lwp_start(void){
 tid_t lwp_wait(int *status){
     ensure_scheduler();
 
-    // Ensure we have a scheduler_main context if none yet
     if(!scheduler_main){
-        scheduler_main = (thread)
-            calloc(1, sizeof(*scheduler_main));
+        scheduler_main = calloc(1, sizeof(*scheduler_main));
         if(!scheduler_main) return NO_THREAD;
         scheduler_main->tid    = next_tid++;
         scheduler_main->status = MKTERMSTAT(LWP_LIVE, 0);
@@ -243,30 +249,33 @@ tid_t lwp_wait(int *status){
         current = scheduler_main;
     }
 
-    // Run until someone finishes or nothing is runnable
+    // Run until someone finishes or nothing is runnable / no progress possible
     while(!term_head){
-        int q = (cur_sched && cur_sched->qlen) 
-            ? cur_sched->qlen() : 0;
+        int q = (cur_sched && cur_sched->qlen) ? 
+        cur_sched->qlen() : 0;
         if(q == 0) return NO_THREAD;
+
+        thread before = current;
         lwp_yield();
+
+        if(current == before && !term_head){
+            return NO_THREAD;
+        }
     }
 
-    // Dequeue a finished thread
+    // dequeue a finished thread
     thread t = term_dequeue();
     tid_t tid = t->tid;
     if(status) *status = t->status;
 
-    // Cleanup (not for scheduler_main)
     if(t != scheduler_main){
         if(t->stack && t->stacksize) 
-            munmap((void*)t->stack, t->stacksize);
+        munmap((void*)t->stack, t->stacksize);
         remove_thread_global(t);
         free(t);
     }
     return tid;
 }
-
-
 
 
 // Set the current scheduler, migrating threads as needed

@@ -24,7 +24,7 @@ magic64.o: magic64.S lwp.h fp.h
 	$(CC) -c $< -o $@
 
 clean:
-	rm -f *.o liblwp.so tests/*.out
+	rm -f *.o liblwp.so tests/*.out core.* tmpfile.* t_script.*
 
 test: all
 	$(MAKE) -C tests

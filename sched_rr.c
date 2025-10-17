@@ -4,7 +4,7 @@
 typedef struct node { thread t; struct node *next; } node;
 static node *head = NULL, *tail = NULL;
 
-/* forward decl so rr_admit can call it without implicit declaration */
+/* forward decl */
 static void rr_remove(thread t);
 
 static void rr_init(void){
@@ -20,8 +20,33 @@ static void rr_shutdown(void){
   tail = NULL;
 }
 
+static void rr_remove(thread t){
+  if (!t || !head) return;
+
+  node **pp = &head;
+  while (*pp) {
+    if ((*pp)->t == t) {
+      node *dead = *pp;
+      *pp = dead->next;
+
+      /* fix tail if we removed it */
+      if (dead == tail) {
+        /* recompute tail (O(n), fine for simple RR) */
+        tail = NULL;
+        for (node *p = head; p; p = p->next) tail = p;
+      }
+
+      free(dead);
+      return;
+    }
+    pp = &(*pp)->next;
+  }
+}
+
 static void rr_admit(thread t){
-  /* DE-DUPE: ensure t isn’t already in the queue */
+  if (!t) return;
+
+  /* DE-DUPE: ensure t isn’t already queued */
   rr_remove(t);
 
   node *n = (node*)malloc(sizeof(*n));
@@ -34,21 +59,6 @@ static void rr_admit(thread t){
   } else {
     tail->next = n;
     tail = n;
-  }
-}
-
-static void rr_remove(thread t){
-  node *prev = NULL, *cur = head;
-  while (cur) {
-    if (cur->t == t) {
-      if (prev) prev->next = cur->next;
-      else      head = cur->next;
-      if (cur == tail) tail = prev;
-      free(cur);
-      return;
-    }
-    prev = cur;
-    cur = cur->next;
   }
 }
 
