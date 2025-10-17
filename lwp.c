@@ -10,6 +10,7 @@
 // Global state
 typedef struct glnode { thread t; struct glnode *next; } glnode;
 static int notify_main_pending = 0;
+static int notify_main_count = 0;
 static scheduler cur_sched = NULL;   // current scheduler
 static thread    current   = NULL;
 static tid_t     next_tid  = 1;
@@ -158,44 +159,49 @@ tid_t lwp_create(lwpfun f, void *arg){
 // Exit: terminate the current thread
 void lwp_exit(int code){
     thread me = current;
-    if(!me) return;
+    if (!me) return;
 
+    /* Mark terminated with low 8-bit status */
     me->status = MKTERMSTAT(LWP_TERM, code & 0xFF);
 
+    /* Make sure the exiting thread isn’t left in the run queue */
     if (cur_sched && cur_sched->remove) cur_sched->remove(me);
+
+    /* Put it on the terminated FIFO (not for scheduler_main) */
     if (me != scheduler_main) term_enqueue(me);
 
-    /* Ask scheduler if someone else can run now. */
-    thread next = (cur_sched && cur_sched->next) ? cur_sched->next() : NULL;
+    int live = 0;
+    for (glnode *p = ghead; p; p = p->next){
+        thread t = p->t;
+        if (t && t != scheduler_main && !LWPTERMINATED(t->status)) live++;
+    }
 
-    if(next){
-        notify_main_pending++;
+    thread next = (cur_sched && cur_sched->next) ? cur_sched->next() : NULL;
+    if (next){
+        notify_main_count = live;
         current = next;
-        swap_rfiles(&me->state, &next->state); /* does not return */
+        swap_rfiles(&me->state, &next->state);  /* does not return */
         return;
     }
 
-    /* No one runnable: go straight to main if we have it. */
-    if(scheduler_main){
+    /* Nobody runnable: return to the system thread if we have it. */
+    if (scheduler_main){
         current = scheduler_main;
         swap_rfiles(&me->state, &scheduler_main->state);
     }
 }
 
 
-
-
-
-
-
 // Get TID of current thread (or NO_THREAD if none)
 tid_t lwp_gettid(void){
   return current ? current->tid : NO_THREAD;
 }
+
 // Yield: voluntarily give up the CPU to another thread
 void lwp_yield(void){
     ensure_scheduler();
 
+    /* Lazily capture the system thread as a schedulable context */
     if(!scheduler_main){
         scheduler_main = (thread)calloc(1, sizeof(*scheduler_main));
         if(!scheduler_main) return;
@@ -204,35 +210,43 @@ void lwp_yield(void){
         add_thread_global(scheduler_main);
     }
 
-    thread old  = current ? current : scheduler_main;
+    thread old = current ? current : scheduler_main;
 
-    /* If we owe main a turn, bounce to it ONCE—without dropping 'old'. */
-    if (notify_main_pending > 0 && old != scheduler_main) {
-        /* Keep 'old' in the RR queue if it's still live. */
-        if (!LWPTERMINATED(old->status) && cur_sched && cur_sched->admit) {
-            cur_sched->admit(old);
+    if (notify_main_count > 0 && old != scheduler_main) {
+        notify_main_count--;
+        if (notify_main_count == 0) {
+            if (!LWPTERMINATED(old->status) && cur_sched 
+            && cur_sched->admit) {
+                cur_sched->admit(old);
+            }
+            current = scheduler_main;
+            swap_rfiles(&old->state, &scheduler_main->state);
+            return;
         }
-        notify_main_pending--;                 /* consume one wake */
-        current = scheduler_main;
-        swap_rfiles(&old->state, &scheduler_main->state);
-        return;
     }
 
-    /* ... your existing next()/re-admit logic ... */
+    /* Normal RR scheduling */
     thread next = (cur_sched && cur_sched->next) ? cur_sched->next() : NULL;
 
     if(!next){
+        /* Nobody else ready. If we're already in main, just idle. */
         if(old == scheduler_main) return;
+
+        /* If old is still live, keep running it (yield is a no-op). */
         if(!LWPTERMINATED(old->status)) return;
+
+        /* Old is terminated and no one else runnable -> return to main. */
         current = scheduler_main;
         swap_rfiles(&old->state, &scheduler_main->state);
         return;
     }
 
+    /* Re-admit the yielding LWP if it's still live and not main. */
     if(old != scheduler_main && !LWPTERMINATED(old->status) 
-        && cur_sched->admit){
+    && cur_sched->admit){
         cur_sched->admit(old);
     }
+
     current = next;
     swap_rfiles(&old->state, &current->state);
 }
