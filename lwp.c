@@ -170,7 +170,8 @@ void lwp_yield(void){
   thread next = NULL;
   if (cur_sched && cur_sched->next) next = cur_sched->next();
 
-  int should_readmit = (old && old != scheduler_main && !LWPTERMINATED(old->status));
+  int should_readmit = (old && old != scheduler_main 
+        && !LWPTERMINATED(old->status));
 
   if (!next) {
     if (should_readmit) {
