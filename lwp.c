@@ -153,7 +153,7 @@ void lwp_exit(int code){
     // Remove from ready queue if present
     if (cur_sched && cur_sched->remove) cur_sched->remove(me);
 
-    // If someone is waiting, hand this exiting thread directly to the oldest waiter
+    // If someone is waiting
     thread waiter = wait_dequeue();
     if (waiter) {
         waiter->exited = me;
