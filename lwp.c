@@ -59,9 +59,21 @@ static void ensure_scheduler(void){
 
 // Find thread by TID
 thread tid2thread(tid_t tid){
-    if ((size_t)tid < tidcap) return tidtab[tid];
-    return NULL;
+    // Only positive user-created tids are valid
+    if (tid <= 0) return NULL;
+
+    if ((size_t)tid >= tidcap) return NULL;
+
+    thread t = tidtab[tid];
+    // If we ever cleared the slot (freed or never used), return NULL
+    if (!t) return NULL;
+
+    // Optional extra sanity: ensure the record’s tid matches the index
+    if (t->tid != tid) return NULL;
+
+    return t;
 }
+
 
 
 // Trampoline function for new LWPs
@@ -112,23 +124,17 @@ tid_t lwp_create(lwpfun f, void *arg){
     // FPU init as provided by fp.h
     t->state.fxsave = FPU_INIT;
 
-    // After 'ret' into lwp_trampoline, ABI wants %rsp ≡ 8 (mod 16).
-    // So the saved %rsp itself must be 16B aligned, and the slot at [%rsp]
-    // must contain the non-zero return address (lwp_trampoline).
-    // Top of stack, 16B-align a frame base:
     uintptr_t top   = (uintptr_t)t->stack + t->stacksize;
-    // Make a 16B-aligned base, then offset by +8 so frame % 16 == 8
-    uintptr_t frame = ((top - 24) & ~(uintptr_t)0xFUL) + 8;
+    uintptr_t frame = ((top - 24) & ~(uintptr_t)0xFUL) + 8;  // frame % 16 == 8
 
-    // Fake frame: [frame+0] = saved RBP, [frame+8] = return address
-    *(uintptr_t*)(frame + 0) = 0;
-    *(uintptr_t*)(frame + 8) = (uintptr_t)lwp_trampoline;
+    *(uintptr_t*)(frame + 0) = 0;                           // saved RBP
+    *(uintptr_t*)(frame + 8) = (uintptr_t)lwp_trampoline;   // return address
 
-    // Registers so that "leave; ret" jumps into lwp_trampoline(f,arg)
     t->state.rbp = frame;
     t->state.rsp = frame;
-    t->state.rdi = (uintptr_t)f;
-    t->state.rsi = (uintptr_t)arg;
+    t->state.rdi = (uintptr_t)f;     // arg1
+    t->state.rsi = (uintptr_t)arg;   // arg2
+
 
 
     // Add to global list and admit to scheduler
@@ -234,10 +240,6 @@ void lwp_start(void){
     // Save the current CPU state into scheduler_main so it can be scheduled
     swap_rfiles(&scheduler_main->state, NULL);
     current = scheduler_main;
-
-    // Register in the tid table
-    ensure_tidcap(0);
-    tidtab[0] = scheduler_main;
 
     // *** Admit main to the ready queue and immediately yield ***
     if (cur_sched && cur_sched->admit) cur_sched->admit(scheduler_main);
