@@ -162,21 +162,27 @@ void lwp_exit(int code){
     // mark 8-bit status + terminated
     me->status = MKTERMSTAT(LWP_TERM, code & 0xFF);
 
-    // ensure it’s not in the run queue anymore
+    // Ensure it's not in the run queue anymore
     if (cur_sched && cur_sched->remove) cur_sched->remove(me);
 
     // enqueue on terminated FIFO (not for scheduler_main)
     if (me != scheduler_main) term_enqueue(me);
 
-    if(scheduler_main){
+    // Prefer to continue RR if others are runnable
+    thread next = (cur_sched && cur_sched->next) ? cur_sched->next() : NULL;
+
+    if(next){
+        current = next;
+        swap_rfiles(&me->state, &next->state);
+    } else if(scheduler_main){
         current = scheduler_main;
         swap_rfiles(&me->state, &scheduler_main->state);
-        /* not expected to resume here */
-    }else{
-        // Fallback: if main hasn't been created yet, just yield.
-        lwp_yield();
+    } else {
+        // No next and no scheduler_main yet: nothing to run. Just return.
+        // (This case is unlikely, but keeps us safe.)
     }
 }
+
 
 
 
