@@ -241,7 +241,7 @@ tid_t lwp_wait(int *status){
     ensure_scheduler();
 
     if(!scheduler_main){
-        scheduler_main = calloc(1, sizeof(*scheduler_main));
+        scheduler_main = (thread)calloc(1, sizeof(*scheduler_main));
         if(!scheduler_main) return NO_THREAD;
         scheduler_main->tid    = next_tid++;
         scheduler_main->status = MKTERMSTAT(LWP_LIVE, 0);
@@ -249,33 +249,37 @@ tid_t lwp_wait(int *status){
         current = scheduler_main;
     }
 
-    // Run until someone finishes or nothing is runnable / no progress possible
+    // Run until someone finishes or no live LWPs remain
     while(!term_head){
-        int q = (cur_sched && cur_sched->qlen) ? 
-        cur_sched->qlen() : 0;
-        if(q == 0) return NO_THREAD;
-
         thread before = current;
         lwp_yield();
 
-        if(current == before && !term_head){
-            return NO_THREAD;
+        if(!term_head && current == before){
+            // No context switch happened; check if any live LWPs exist
+            int any_live = 0;
+            for (glnode *p = ghead; p; p = p->next){
+                thread t = p->t;
+                if (t && t != scheduler_main && !LWPTERMINATED(t->status)){
+                    any_live = 1; break;
+                }
+            }
+            if(!any_live) return NO_THREAD;
         }
     }
 
-    // dequeue a finished thread
+    // A thread finished:
     thread t = term_dequeue();
     tid_t tid = t->tid;
     if(status) *status = t->status;
 
     if(t != scheduler_main){
-        if(t->stack && t->stacksize) 
-        munmap((void*)t->stack, t->stacksize);
+        if(t->stack && t->stacksize) munmap((void*)t->stack, t->stacksize);
         remove_thread_global(t);
         free(t);
     }
     return tid;
 }
+
 
 
 // Set the current scheduler, migrating threads as needed
