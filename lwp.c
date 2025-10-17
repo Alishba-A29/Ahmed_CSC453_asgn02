@@ -163,29 +163,31 @@ tid_t lwp_gettid(void){
 // Yield: voluntarily give up the CPU to another thread
 void lwp_yield(void){
   ensure_scheduler();
-  thread old  = current ? current : scheduler_main;
 
-  /* Get next runnable */
-  thread next = NULL;
-  if (cur_sched && cur_sched->next) next = cur_sched->next();
+  thread old = current ? current : scheduler_main;
 
-  if (old && old != scheduler_main &&
-      !LWPTERMINATED(old->status) &&
-      next != old) {
+  if (old && old != scheduler_main 
+    && !LWPTERMINATED(old->status)) {
     if (cur_sched && cur_sched->admit) cur_sched->admit(old);
   }
 
+  /* Now ask the scheduler who runs next. */
+  thread next = NULL;
+  if (cur_sched && cur_sched->next) next = cur_sched->next();
+
+  /* Nobody ready? park on the system thread. */
   if (!next) {
     current = scheduler_main;
     swap_rfiles(&old->state, &scheduler_main->state);
     return;
   }
 
-  if (next == old) return;
+  if (next == old) return; 
 
   current = next;
   swap_rfiles(&old->state, &next->state);
 }
+
 
 
 
@@ -208,28 +210,29 @@ void lwp_start(void){
 
 // Wait: wait for any thread to terminate; 
 tid_t lwp_wait(int *status){
-    while(!term_head){
-        // nothing left to wait for
-        if(!cur_sched || cur_sched->qlen()==0) return NO_THREAD;
-        lwp_yield();
+  for (;;) {
+    if (term_head) break;
+
+    int q = (cur_sched && cur_sched->qlen) ? cur_sched->qlen() : 0;
+    if (q == 0 && (current == NULL || current == scheduler_main)) {
+      return NO_THREAD;
     }
 
-    // Pop oldest terminated
-    thread t = term_dequeue();
-    tid_t tid = t->tid;
+    lwp_yield();
+  }
 
-    // Reap any other terminated threads while we're here
-    if(status) *status = t->status;
+  thread t = term_dequeue();
+  tid_t tid = t->tid;
+  if (status) *status = t->status;
 
-    // Cleanup for real LWPs (not the captured scheduler_main)
-    if(t != scheduler_main){
-        if(t->stack && t->stacksize) 
-            munmap((void*)t->stack, t->stacksize);
-        remove_thread_global(t);
-        free(t);
-    }
-    return tid;
+  if (t != scheduler_main) {
+    if (t->stack && t->stacksize) munmap((void*)t->stack, t->stacksize);
+    remove_thread_global(t);
+    free(t);
+  }
+  return tid;
 }
+
 
 // Set the current scheduler, migrating threads as needed
 void lwp_set_scheduler(scheduler newsched) {
