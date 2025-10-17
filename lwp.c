@@ -170,23 +170,18 @@ void lwp_yield(void){
   thread next = NULL;
   if (cur_sched && cur_sched->next) next = cur_sched->next();
 
+  if (!next || next == scheduler_main) {
+    next = scheduler_main;
+  }
+
   int should_readmit = (old && old != scheduler_main 
         && !LWPTERMINATED(old->status));
 
-  if (!next) {
-    if (should_readmit) {
-      if (cur_sched && cur_sched->admit) cur_sched->admit(old);
-    }
-    current = scheduler_main;
-    swap_rfiles(&old->state, &scheduler_main->state);
-    return;
+  if (should_readmit && old != next) {
+    if (cur_sched && cur_sched->admit) cur_sched->admit(old);
   }
 
   if (next == old) return;
-
-  if (should_readmit) {
-    if (cur_sched && cur_sched->admit) cur_sched->admit(old);
-  }
 
   current = next;
   // Perform context switch: save old thread state and restore next thread state
@@ -245,25 +240,32 @@ void lwp_set_scheduler(scheduler newsched) {
 
   if (newsched->init) newsched->init();
 
-  if (cur_sched) {
-    for (glnode *n = ghead; n; n = n->next) {
-      thread p = n->t;
-      if (!p) continue;
-      if (p == scheduler_main) continue;
-      if (p == current)        continue;
-      if (LWPTERMINATED(p->status)) continue;
-
-      if (cur_sched->remove) cur_sched->remove(p);
-      if (newsched->admit)   newsched->admit(p);
-    }
-    if (cur_sched->shutdown) cur_sched->shutdown();
-  }
-
+  scheduler old_sched = cur_sched;
   cur_sched = newsched;
 
-  if (!current || current == scheduler_main) {
-    lwp_yield();
+  if (old_sched) {
+    // Move all live threads to new scheduler
+    for (glnode *n = ghead; n; n = n->next) {
+      thread p = n->t;
+      if (!p || p == scheduler_main || LWPTERMINATED(p->status)) 
+        continue;
+
+      if (old_sched->remove) old_sched->remove(p);
+      if (newsched->admit)   newsched->admit(p);
+    }
+
+    // Handle current thread specially
+    if (current && current != scheduler_main 
+        && !LWPTERMINATED(current->status)) {
+      if (old_sched->remove) old_sched->remove(current);
+      if (newsched->admit)   newsched->admit(current);
+    }
+
+    if (old_sched->shutdown) old_sched->shutdown();
   }
+
+  // Yield to get new scheduler running
+  lwp_yield();
 }
 
 
