@@ -20,7 +20,7 @@ static void rr_admit(thread t){
   n->t = t; n->next = NULL;
   if (!tail) head = tail = n;
   else { tail->next = n; tail = n; }
-  t->lib_two = (void*)1;
+   t->sched_two = (void*)1;
 }
 
 static void rr_remove(thread t){
@@ -31,7 +31,7 @@ static void rr_remove(thread t){
       else head = cur->next;
       if (cur == tail) tail = prev;
       free(cur);
-      t->lib_two = (void*)0; 
+      t->sched_two = (void*)0; 
       return;
     }
     prev = cur; cur = cur->next;
@@ -43,7 +43,7 @@ static thread rr_next(void){
   node *n = head; head = head->next;
   if (!head) tail = NULL;
   thread t = n->t; free(n);
-  t->lib_two = (void*)2;  
+  t->sched_two = (void*)2;
   return t;
 }
 

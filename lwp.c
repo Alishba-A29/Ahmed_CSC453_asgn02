@@ -8,12 +8,13 @@
 #include <stdio.h>
 
 // Global state
+typedef struct glnode { thread t; struct glnode *next; } glnode;
 static scheduler cur_sched = NULL;   // current scheduler
 static thread    current   = NULL;
 static tid_t     next_tid  = 1;
 static thread scheduler_main = NULL;   // never admitted to RR queue
 static thread term_head = NULL, term_tail = NULL;
-static thread all_threads = NULL;
+static glnode *ghead = NULL;
 
 // enqueue onto terminated FIFO (oldest-first)
 static void term_enqueue(thread t){
@@ -34,18 +35,23 @@ static thread term_dequeue(void){
 
 // All-threads singly-linked list management
 static void add_thread_global(thread t){
-    t->lib_one = all_threads;
-    all_threads = t;
+    glnode *n = (glnode*)malloc(sizeof(*n));
+    if(!n) return; 
+    n->t = t; 
+    n->next = ghead; 
+    ghead = n;
 }
 
 static void remove_thread_global(thread t){
-    thread *pp = &all_threads;
+    glnode **pp = &ghead;
     while (*pp) {
-        if (*pp == t) {
-            *pp = t->lib_one;  // unlink from list
+        if ((*pp)->t == t) {
+            glnode *dead = *pp;
+            *pp = dead->next;
+            free(dead);
             return;
         }
-        pp = &(*pp)->lib_one;
+        pp = &(*pp)->next;
     }
 }
 
@@ -62,12 +68,11 @@ static void ensure_scheduler(void){
 }
 
 // Find thread by TID
-thread tid2thread(tid_t tid) {
-    for (thread p = all_threads; p; p = p->lib_one) {
-        if (p->tid == tid) return p;
+thread tid2thread(tid_t tid){
+    for (glnode *p = ghead; p; p = p->next){
+        if (p->t->tid == tid) return p->t;
     }
-    // MUST return NULL for a bad tid
-    return NULL;
+    return NULL; // MUST return NULL for a bad tid
 }
 
 // Trampoline function for new LWPs
@@ -141,24 +146,12 @@ void lwp_exit(int code){
 
     if (cur_sched && cur_sched->remove) cur_sched->remove(me);
 
-    if (me != scheduler_main) {
-        term_enqueue(me);
-    }
+    if (me != scheduler_main) term_enqueue(me);
 
-    thread next = NULL;
-    if (cur_sched && cur_sched->next)
-        next = cur_sched->next();
-
-    if (next == me) next = NULL; 
-
-    if (next) {
-        current = next;
-        swap_rfiles(&me->state, &next->state);
-    } else {
-        current = scheduler_main;
-        swap_rfiles(&me->state, &scheduler_main->state);
-    }
+    current = scheduler_main;
+    swap_rfiles(&me->state, &scheduler_main->state);
 }
+
 
 
 
@@ -172,14 +165,12 @@ void lwp_yield(void){
   ensure_scheduler();
   thread old  = current ? current : scheduler_main;
 
-  // Ask for next
   thread next = NULL;
-  if (cur_sched && cur_sched->next)
-    next = cur_sched->next();
+  if (cur_sched && cur_sched->next) next = cur_sched->next();
 
   if (old && old != scheduler_main
       && !LWPTERMINATED(old->status)
-      && old->lib_two == (void*)2
+      && old->sched_two == (void*)2    // was lib_two
       && next != old) {
     if (cur_sched->admit) cur_sched->admit(old);
   }
@@ -247,12 +238,13 @@ void lwp_set_scheduler(scheduler newsched) {
 
   if (cur_sched) {
     // Migrate all live threads (not the system thread; not terminated)
-    for (thread p = all_threads; p; p = p->lib_one) {
-      if (p == current) continue;
-      if (LWPTERMINATED(p->status)) continue;
+    for (glnode *n = ghead; n; n = n->next) {
+        thread p = n->t;
+        if (!p || p == current) continue;
+        if (LWPTERMINATED(p->status)) continue;
 
-      if (newsched->admit)  newsched->admit(p);
-      if (cur_sched->remove) cur_sched->remove(p);
+        if (newsched->admit)   newsched->admit(p);
+        if (cur_sched->remove) cur_sched->remove(p);
     }
     if (cur_sched->shutdown) cur_sched->shutdown();
   }
