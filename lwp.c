@@ -117,7 +117,7 @@ tid_t lwp_create(lwpfun f, void *arg){
     // must contain the non-zero return address (lwp_trampoline).
     // Top of stack, 16B-align a frame base:
     uintptr_t top = (uintptr_t)t->stack + t->stacksize;
-    uintptr_t frame = (top - 16) & ~(uintptr_t)0xFUL;   // 16B aligned frame base
+    uintptr_t frame = (top - 16) & ~(uintptr_t)0xFUL;
 
     *(uintptr_t*)(frame + 0) = 0;
     *(uintptr_t*)(frame + 8) = (uintptr_t)lwp_trampoline;
