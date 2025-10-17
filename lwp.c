@@ -138,6 +138,9 @@ tid_t lwp_create(lwpfun f, void *arg){
 // Exit: terminate the current thread
 void lwp_exit(int code){
     if (!current) _exit(code & 0xFF);
+    if (current == scheduler_main) {
+        _exit(code & 0xFF);
+    }
     thread me = current;
 
     // Mark terminated with 8-bit code
