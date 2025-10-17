@@ -211,8 +211,7 @@ void lwp_yield(void){
             int code = LWPTERMSTAT(scheduler_main ? scheduler_main->status : 0);
             _exit(code);
         }
-
-        // Try again to get a different runnable thread BEFORE re-admitting 'old'
+        
         thread alt = cur_sched->next();
         if (alt && alt != old) {
             next = alt;  // switch to someone else; do not re-admit 'old' yet
