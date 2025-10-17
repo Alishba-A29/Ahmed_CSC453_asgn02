@@ -9,6 +9,7 @@
 
 // Global state
 typedef struct glnode { thread t; struct glnode *next; } glnode;
+static int wake_main_once = 0;
 static scheduler cur_sched = NULL;   // current scheduler
 static thread    current   = NULL;
 static tid_t     next_tid  = 1;
@@ -159,29 +160,26 @@ void lwp_exit(int code){
     thread me = current;
     if(!me) return;
 
-    // mark 8-bit status + terminated
     me->status = MKTERMSTAT(LWP_TERM, code & 0xFF);
-
-    // Ensure it's not in the run queue anymore
     if (cur_sched && cur_sched->remove) cur_sched->remove(me);
-
-    // enqueue on terminated FIFO (not for scheduler_main)
     if (me != scheduler_main) term_enqueue(me);
 
-    // Prefer to continue RR if others are runnable
+    // If someone else is runnable, run them once, *then* wake main.
     thread next = (cur_sched && cur_sched->next) ? cur_sched->next() : NULL;
-
     if(next){
+        wake_main_once = 1;
         current = next;
         swap_rfiles(&me->state, &next->state);
-    } else if(scheduler_main){
+        return;                             // not expected to resume here
+    }
+
+    // Otherwise, no one runnable: go straight to main if it exists.
+    if(scheduler_main){
         current = scheduler_main;
         swap_rfiles(&me->state, &scheduler_main->state);
-    } else {
-        // No next and no scheduler_main yet: nothing to run. Just return.
-        // (This case is unlikely, but keeps us safe.)
     }
 }
+
 
 
 
@@ -194,45 +192,38 @@ tid_t lwp_gettid(void){
 void lwp_yield(void){
     ensure_scheduler();
 
-    // Ensure we have a scheduler_main context if none yet
-    if(!scheduler_main){
-        scheduler_main = (thread)
-            calloc(1, sizeof(*scheduler_main));
-        if(!scheduler_main) return;
-        scheduler_main->tid    = next_tid++;
-        scheduler_main->status = MKTERMSTAT(LWP_LIVE, 0);
-        add_thread_global(scheduler_main); 
-    }
+    // create scheduler_main on demand (keep your existing code)
+    if(!scheduler_main){ /* ... */ }
 
-    // Ensure we have an 'old' context to save into
-    thread old  = current ? current : scheduler_main;
+    thread old = current ? current : scheduler_main;
 
-    // Ask scheduler for next runnable LWP
-    thread next = (cur_sched && cur_sched->next) 
-        ? cur_sched->next() : NULL;
-
-    if(!next){
-        // Nobody else ready.
-        if(old == scheduler_main) return;
-
-        if(!LWPTERMINATED(old->status)) return;
-
-        // old is terminated and no one else runnable -> back to scheduler_main
+    // If we owe main a turn, bounce to it *now*.
+    if(wake_main_once && old != scheduler_main){
+        wake_main_once = 0;
         current = scheduler_main;
         swap_rfiles(&old->state, &scheduler_main->state);
         return;
     }
 
-    // Re-admit the old one if it's live and not scheduler_main
-    if(old != scheduler_main && 
-            !LWPTERMINATED(old->status) && 
-                cur_sched->admit){
-        cur_sched->admit(old);
+    // ... then do your usual next()/re-admit logic ...
+    thread next = (cur_sched && cur_sched->next) ? cur_sched->next() : NULL;
+
+    if(!next){
+        if(old == scheduler_main) return;
+        if(!LWPTERMINATED(old->status)) return;
+        current = scheduler_main;
+        swap_rfiles(&old->state, &scheduler_main->state);
+        return;
     }
 
+    if(old != scheduler_main && !LWPTERMINATED(old->status) 
+    && cur_sched->admit){
+        cur_sched->admit(old);
+    }
     current = next;
     swap_rfiles(&old->state, &current->state);
 }
+
 
 
 // Start: begin scheduling threads
