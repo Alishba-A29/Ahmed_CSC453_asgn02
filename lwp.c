@@ -166,27 +166,29 @@ void lwp_yield(void){
 
   thread old = current ? current : scheduler_main;
 
-  if (old && old != scheduler_main 
-    && !LWPTERMINATED(old->status)) {
-    if (cur_sched && cur_sched->admit) cur_sched->admit(old);
-  }
-
-  /* Now ask the scheduler who runs next. */
+  /* Ask scheduler who should run next */
   thread next = NULL;
   if (cur_sched && cur_sched->next) next = cur_sched->next();
 
-  /* Nobody ready? park on the system thread. */
   if (!next) {
+    if (old && old != scheduler_main && !LWPTERMINATED(old->status)) {
+      if (cur_sched && cur_sched->admit) cur_sched->admit(old);
+    }
     current = scheduler_main;
     swap_rfiles(&old->state, &scheduler_main->state);
     return;
   }
 
-  if (next == old) return; 
+  if (next == old) return;
+
+  if (old && old != scheduler_main && !LWPTERMINATED(old->status)) {
+    if (cur_sched && cur_sched->admit) cur_sched->admit(old);
+  }
 
   current = next;
   swap_rfiles(&old->state, &next->state);
 }
+
 
 
 
@@ -211,9 +213,10 @@ void lwp_start(void){
 // Wait: wait for any thread to terminate; 
 tid_t lwp_wait(int *status){
   for (;;) {
-    if (term_head) break;
+    if (term_head) break;  /* have one to reap */
 
-    int q = (cur_sched && cur_sched->qlen) ? cur_sched->qlen() : 0;
+    int q = (cur_sched && cur_sched->qlen) 
+        ? cur_sched->qlen() : 0;
     if (q == 0 && (current == NULL || current == scheduler_main)) {
       return NO_THREAD;
     }
@@ -225,13 +228,14 @@ tid_t lwp_wait(int *status){
   tid_t tid = t->tid;
   if (status) *status = t->status;
 
-  if (t != scheduler_main) {
+  if (t != scheduler_main){
     if (t->stack && t->stacksize) munmap((void*)t->stack, t->stacksize);
     remove_thread_global(t);
     free(t);
   }
   return tid;
 }
+
 
 
 // Set the current scheduler, migrating threads as needed
