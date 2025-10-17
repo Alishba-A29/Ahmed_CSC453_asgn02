@@ -170,8 +170,10 @@ void lwp_yield(void){
   thread next = NULL;
   if (cur_sched && cur_sched->next) next = cur_sched->next();
 
+  int should_readmit = (old && old != scheduler_main && !LWPTERMINATED(old->status));
+
   if (!next) {
-    if (old && old != scheduler_main && !LWPTERMINATED(old->status)) {
+    if (should_readmit) {
       if (cur_sched && cur_sched->admit) cur_sched->admit(old);
     }
     current = scheduler_main;
@@ -181,17 +183,14 @@ void lwp_yield(void){
 
   if (next == old) return;
 
-  if (old && old != scheduler_main && !LWPTERMINATED(old->status)) {
+  if (should_readmit) {
     if (cur_sched && cur_sched->admit) cur_sched->admit(old);
   }
 
   current = next;
+  // Perform context switch: save old thread state and restore next thread state
   swap_rfiles(&old->state, &next->state);
 }
-
-
-
-
 
 
 // Start the LWP system by capturing the current thread as scheduler_main
