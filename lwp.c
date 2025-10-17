@@ -135,21 +135,31 @@ tid_t lwp_create(lwpfun f, void *arg){
 }
 
 // Exit: terminate the current thread
-
 void lwp_exit(int code){
     thread me = current;
     me->status = MKTERMSTAT(LWP_TERM, code & 0xFF);
 
-    if(cur_sched && cur_sched->remove) cur_sched->remove(me);
+    if (cur_sched && cur_sched->remove) cur_sched->remove(me);
 
-    if (me != scheduler_main) {      // <-- guard this
+    if (me != scheduler_main) {
         term_enqueue(me);
     }
 
-    current = scheduler_main;
-    swap_rfiles(&me->state, &scheduler_main->state);
-    // never returns
+    thread next = NULL;
+    if (cur_sched && cur_sched->next)
+        next = cur_sched->next();
+
+    if (next == me) next = NULL; 
+
+    if (next) {
+        current = next;
+        swap_rfiles(&me->state, &next->state);
+    } else {
+        current = scheduler_main;
+        swap_rfiles(&me->state, &scheduler_main->state);
+    }
 }
+
 
 
 
