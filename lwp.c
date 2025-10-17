@@ -145,42 +145,34 @@ tid_t lwp_create(lwpfun f, void *arg){
 }
 
 // Exit: terminate the current thread
-void lwp_exit(int code){
-    if (!current) _exit(code & 0xFF);
-
-    // If the system thread tries to exit, end the process.
-    if (current == scheduler_main) {
-        _exit(code & 0xFF);
-    }
-
+void lwp_exit(int code) {
     thread me = current;
 
-    // Mark terminated with 8-bit code
+    // Mark terminated (keep only low 8 bits as your tests expect)
     me->status = MKTERMSTAT(LWP_TERM, code & 0xFF);
 
-    // Remove from ready queue if present
+    // Make sure it's not in the ready queue anymore
     if (cur_sched && cur_sched->remove) cur_sched->remove(me);
 
-    // If someone is waiting
-    thread waiter = wait_dequeue();
-    if (waiter) {
-        waiter->exited = me;
-        if (cur_sched && cur_sched->admit) cur_sched->admit(waiter);
-    } else {
-        // No waiters yet → enqueue onto terminated FIFO (oldest-first)
-        me->lib_two = NULL;
-        if (!term_head) term_head = term_tail = me;
-        else { term_tail->lib_two = me; term_tail = me; }
-    }
+    // Put onto the terminated list so lwp_wait() can see it
+    term_enqueue(me);
 
-    // Return control to main (your bounce-through-main design)
-    if (scheduler_main) {
+    // Pick the next runnable thread
+    thread next = NULL;
+    if (cur_sched && cur_sched->next)
+        next = cur_sched->next();
+
+    if (next) {
+        // Keep running LWPs; don't go back to system thread yet
+        current = next;
+        swap_rfiles(&me->state, &next->state);
+    } else {
+        // No runnable LWPs; return to system thread to let main reap
         current = scheduler_main;
         swap_rfiles(&me->state, &scheduler_main->state);
-        __builtin_unreachable();
     }
 
-    _exit(LWPTERMSTAT(me->status)); // Shouldn't happen after lwp_start
+    // no return
 }
 
 
