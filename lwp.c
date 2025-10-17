@@ -159,16 +159,25 @@ void lwp_exit(int code){
     thread me = current;
     if(!me) return;
 
+    // mark 8-bit status + terminated
     me->status = MKTERMSTAT(LWP_TERM, code & 0xFF);
 
-    // Ensure the exiting thread is not left in any run queue
+    // ensure it’s not in the run queue anymore
     if (cur_sched && cur_sched->remove) cur_sched->remove(me);
 
+    // enqueue on terminated FIFO (not for scheduler_main)
     if (me != scheduler_main) term_enqueue(me);
 
-    lwp_yield();  // hand off (or return to scheduler_main)
-    // not expected to resume here
+    if(scheduler_main){
+        current = scheduler_main;
+        swap_rfiles(&me->state, &scheduler_main->state);
+        /* not expected to resume here */
+    }else{
+        // Fallback: if main hasn't been created yet, just yield.
+        lwp_yield();
+    }
 }
+
 
 
 // Get TID of current thread (or NO_THREAD if none)
