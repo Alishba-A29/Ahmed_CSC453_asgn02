@@ -17,21 +17,21 @@ static thread term_head = NULL, term_tail = NULL;
 static thread all_threads = NULL;
 
 // enqueue onto terminated FIFO (oldest-first)
-static void term_enqueue(thread t){
-    t->exited = NULL;
-    if(!term_head) term_head = term_tail = t;
-    else { term_tail->exited = t; term_tail = t; }
-}
+// static void term_enqueue(thread t){
+//     t->exited = NULL;
+//     if(!term_head) term_head = term_tail = t;
+//     else { term_tail->exited = t; term_tail = t; }
+// }
 
 
-static thread term_dequeue(void){
-    if(!term_head) return NULL;
-    thread t = term_head;
-    term_head = term_head->exited;
-    if(!term_head) term_tail = NULL;
-    t->exited = NULL;
-    return t;
-}
+// static thread term_dequeue(void){
+//     if(!term_head) return NULL;
+//     thread t = term_head;
+//     term_head = term_head->exited;
+//     if(!term_head) term_tail = NULL;
+//     t->exited = NULL;
+//     return t;
+// }
 
 // All-threads singly-linked list management
 static void add_thread_global(thread t){
@@ -39,16 +39,16 @@ static void add_thread_global(thread t){
     all_threads = t;
 }
 
-static void remove_thread_global(thread t){
-    thread *pp = &all_threads;
-    while (*pp) {
-        if (*pp == t) {
-            *pp = t->lib_one;  // unlink from list
-            return;
-        }
-        pp = &(*pp)->lib_one;
-    }
-}
+// static void remove_thread_global(thread t){
+//     thread *pp = &all_threads;
+//     while (*pp) {
+//         if (*pp == t) {
+//             *pp = t->lib_one;  // unlink from list
+//             return;
+//         }
+//         pp = &(*pp)->lib_one;
+//     }
+// }
 
 // Minimal internal RR scheduler forward (implemented in sched_rr.c)
 extern scheduler rr_scheduler(void);
