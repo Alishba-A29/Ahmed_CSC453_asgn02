@@ -42,7 +42,7 @@ static void add_thread_global(thread t){
     ghead = n;
 }
 
-static void remove_thread_global(thread t){
+static void remove_thread_global(thread t) {
     glnode **pp = &ghead;
     while (*pp) {
         if ((*pp)->t == t) {
@@ -67,12 +67,12 @@ static void ensure_scheduler(void){
     }
 }
 
-// Find thread by TID
-thread tid2thread(tid_t tid){
-    for (glnode *p = ghead; p; p = p->next){
-        if (p->t->tid == tid) return p->t;
+thread tid2thread(tid_t tid) {
+    if (tid == NO_THREAD) return NULL;
+    for (glnode *p = ghead; p != NULL; p = p->next) {
+        if (p->t && p->t->tid == tid) return p->t;
     }
-    return NULL; // MUST return NULL for a bad tid
+    return NULL; // return NULL if not found
 }
 
 // Trampoline function for new LWPs
@@ -140,16 +140,21 @@ tid_t lwp_create(lwpfun f, void *arg){
 }
 
 // Exit: terminate the current thread
-void lwp_exit(int code){
+void lwp_exit(int code) {
     thread me = current;
     me->status = MKTERMSTAT(LWP_TERM, code & 0xFF);
 
+    // Remove from scheduler if needed
     if (cur_sched && cur_sched->remove) cur_sched->remove(me);
 
+    // Enqueue to terminated list
     if (me != scheduler_main) term_enqueue(me);
 
-    current = scheduler_main;
+    // Save current context before freeing
     swap_rfiles(&me->state, &scheduler_main->state);
+
+    // Now it's safe to free me
+    free(me);
 }
 
 
@@ -161,31 +166,32 @@ tid_t lwp_gettid(void){
   return current ? current->tid : NO_THREAD;
 }
 // Yield: voluntarily give up the CPU to another thread
-void lwp_yield(void){
-  ensure_scheduler();
+void lwp_yield(void) {
+    ensure_scheduler();
 
-  thread old = current ? current : scheduler_main;
+    thread old = current ? current : scheduler_main;
 
-  /* Ask scheduler who should run next */
-  thread next = NULL;
-  if (cur_sched && cur_sched->next) next = cur_sched->next();
+    // Determine next thread
+    thread next = NULL;
+    if (cur_sched && cur_sched->next) 
+        next = cur_sched->next();
 
-  if (!next || next == scheduler_main) {
-    next = scheduler_main;
-  }
+    if (!next || next == scheduler_main) {
+        next = scheduler_main;
+    }
 
-  int should_readmit = (old && old != scheduler_main 
-        && !LWPTERMINATED(old->status));
+    // Re-admit the old thread if still alive
+    if (old && old != scheduler_main && 
+            !LWPTERMINATED(old->status)) {
+        if (cur_sched && cur_sched->admit) 
+            cur_sched->admit(old);
+    }
 
-  if (should_readmit && old != next) {
-    if (cur_sched && cur_sched->admit) cur_sched->admit(old);
-  }
+    if (next == old) return;
 
-  if (next == old) return;
-
-  current = next;
-  // Perform context switch: save old thread state and restore next thread state
-  swap_rfiles(&old->state, &next->state);
+    // Context switch
+    current = next;
+    swap_rfiles(&old->state, &next->state);
 }
 
 
