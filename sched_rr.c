@@ -15,13 +15,16 @@ static void rr_shutdown(void){
 }
 
 static void rr_admit(thread t){
+  rr_remove(t);
+
   node *n = (node*)malloc(sizeof(*n));
   if (!n) return;
   n->t = t; n->next = NULL;
+
   if (!tail) head = tail = n;
   else { tail->next = n; tail = n; }
-   t->sched_two = (void*)1;
 }
+
 
 static void rr_remove(thread t){
   node *prev = NULL, *cur = head;
@@ -31,7 +34,6 @@ static void rr_remove(thread t){
       else head = cur->next;
       if (cur == tail) tail = prev;
       free(cur);
-      t->sched_two = (void*)0; 
       return;
     }
     prev = cur; cur = cur->next;
@@ -43,7 +45,6 @@ static thread rr_next(void){
   node *n = head; head = head->next;
   if (!head) tail = NULL;
   thread t = n->t; free(n);
-  t->sched_two = (void*)2;
   return t;
 }
 
