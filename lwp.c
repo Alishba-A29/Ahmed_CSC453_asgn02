@@ -241,31 +241,45 @@ void lwp_yield(void){
 
     thread old = current ? current : scheduler_main;
 
-    thread next = (cur_sched && cur_sched->next) ? cur_sched->next() : NULL;
+    /* DISTINCT-SEEN rotation logic (uses notify_mark_seen) */
+    if (notify_need_live > 0 &&
+        old != scheduler_main &&
+        !LWPTERMINATED(old->status))
+    {
+        if (notify_mark_seen(old->tid)) {             // <-- use it here
+            if (notify_seen_cnt >= notify_need_live) {
+                if (cur_sched && cur_sched->admit)    // keep old in RR
+                    cur_sched->admit(old);
+                notify_reset_counts(0);               // consume rotation
+                current = scheduler_main;             // wake main exactly once
+                swap_rfiles(&old->state, &scheduler_main->state);
+                return;
+            }
+        }
+        /* fall through to normal scheduling until we’ve seen all */
+    }
 
+    /* normal scheduling... (keep your next==old guard here) */
+    thread next = (cur_sched && cur_sched->next) ? cur_sched->next() : NULL;
     if(!next){
-        if(old == scheduler_main) return;                 /* idle */
+        if(old == scheduler_main) return;
         if(!LWPTERMINATED(old->status)) return;
         current = scheduler_main;
         swap_rfiles(&old->state, &scheduler_main->state);
         return;
     }
-
-    
     if(next == old){
         return;
     }
-
-    /* Only re-admit if we're actually switching away from old */
     if(old != scheduler_main && !LWPTERMINATED(old->status) 
         && next != old
         && cur_sched->admit){
         cur_sched->admit(old);
     }
-
     current = next;
     swap_rfiles(&old->state, &current->state);
 }
+
 
 
 
