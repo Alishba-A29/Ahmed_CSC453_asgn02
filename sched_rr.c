@@ -4,13 +4,14 @@
 typedef struct node { thread t; struct node *next; } node;
 static node *head = NULL, *tail = NULL;
 
-/* forward decl */
+// Remove a thread from the RR queue
 static void rr_remove(thread t);
 
 static void rr_init(void){
   head = tail = NULL;
 }
 
+// Tear down the RR scheduler
 static void rr_shutdown(void){
   while (head) {
     node *n = head;
@@ -20,6 +21,7 @@ static void rr_shutdown(void){
   tail = NULL;
 }
 
+// Remove a thread from the RR queue
 static void rr_remove(thread t){
   if (!t || !head) return;
 
@@ -28,10 +30,7 @@ static void rr_remove(thread t){
     if ((*pp)->t == t) {
       node *dead = *pp;
       *pp = dead->next;
-
-      /* fix tail if we removed it */
       if (dead == tail) {
-        /* recompute tail (O(n), fine for simple RR) */
         tail = NULL;
         for (node *p = head; p; p = p->next) tail = p;
       }
@@ -43,10 +42,10 @@ static void rr_remove(thread t){
   }
 }
 
+// Admit a thread to the RR queue
 static void rr_admit(thread t){
   if (!t) return;
 
-  /* DE-DUPE: ensure t isn’t already queued */
   rr_remove(t);
 
   node *n = (node*)malloc(sizeof(*n));
@@ -62,6 +61,7 @@ static void rr_admit(thread t){
   }
 }
 
+// Select the next thread from the RR queue
 static thread rr_next(void){
   if (!head) return NULL;
   node *n = head;
@@ -72,12 +72,14 @@ static thread rr_next(void){
   return t;
 }
 
+// Get the length of the RR queue
 static int rr_qlen(void){
   int k = 0;
   for (node *p = head; p; p = p->next) k++;
   return k;
 }
 
+// The RR scheduler instance
 static struct scheduler RR = {
   .init     = rr_init,
   .shutdown = rr_shutdown,

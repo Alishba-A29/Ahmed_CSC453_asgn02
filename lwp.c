@@ -9,7 +9,6 @@
 
 // Global state
 typedef struct glnode { thread t; struct glnode *next; } glnode;
-//static int notify_main_pending = 0;
 static int notify_main_count = 0;
 static scheduler cur_sched = NULL;   // current scheduler
 static thread    current   = NULL;
@@ -33,7 +32,7 @@ static void term_enqueue(thread t){
     else { term_tail->exited = t; term_tail = t; }
 }
 
-
+// dequeue from terminated FIFO (oldest-first)
 static thread term_dequeue(void){
     if(!term_head) return NULL;
     thread t = term_head;
@@ -52,6 +51,7 @@ static void add_thread_global(thread t){
     ghead = n;
 }
 
+// Remove thread from global list
 static void remove_thread_global(thread t){
     glnode **pp = &ghead;
     while (*pp) {
@@ -90,7 +90,6 @@ static void lwp_trampoline(lwpfun f, void *arg){
     int rc = f ? f(arg) : 0;
     lwp_exit(rc);
 }
-
 
 // Create: allocate and initialize a new thread
 tid_t lwp_create(lwpfun f, void *arg){
@@ -155,19 +154,18 @@ tid_t lwp_create(lwpfun f, void *arg){
     return t->tid;
 }
 
-
 // Exit: terminate the current thread
 void lwp_exit(int code){
     thread me = current;
     if (!me) return;
 
-    /* Mark terminated with low 8-bit status */
+    // Mark thread as terminated
     me->status = MKTERMSTAT(LWP_TERM, code & 0xFF);
 
-    /* Make sure the exiting thread isn’t left in the run queue */
+    // Remove from scheduler run queue
     if (cur_sched && cur_sched->remove) cur_sched->remove(me);
 
-    /* Put it on the terminated FIFO (not for scheduler_main) */
+    // Enqueue onto terminated list
     if (me != scheduler_main) term_enqueue(me);
 
     int live = 0;
@@ -180,17 +178,16 @@ void lwp_exit(int code){
     if (next){
         notify_main_count = live;
         current = next;
-        swap_rfiles(&me->state, &next->state);  /* does not return */
+        swap_rfiles(&me->state, &next->state);
         return;
     }
 
-    /* Nobody runnable: return to the system thread if we have it. */
+    // No one else runnable
     if (scheduler_main){
         current = scheduler_main;
         swap_rfiles(&me->state, &scheduler_main->state);
     }
 }
-
 
 // Get TID of current thread (or NO_THREAD if none)
 tid_t lwp_gettid(void){
@@ -201,7 +198,7 @@ tid_t lwp_gettid(void){
 void lwp_yield(void){
     ensure_scheduler();
 
-    /* Lazily capture the system thread as a schedulable context */
+    // Initialize main thread if needed
     if(!scheduler_main){
         scheduler_main = (thread)calloc(1, sizeof(*scheduler_main));
         if(!scheduler_main) return;
@@ -225,23 +222,22 @@ void lwp_yield(void){
         }
     }
 
-    /* Normal RR scheduling */
     thread next = (cur_sched && cur_sched->next) ? cur_sched->next() : NULL;
 
     if(!next){
-        /* Nobody else ready. If we're already in main, just idle. */
+        // Nobody else ready. If we're already in main, just idle.
         if(old == scheduler_main) return;
 
-        /* If old is still live, keep running it (yield is a no-op). */
+        // If old is still live, keep running it (yield is a no-op).
         if(!LWPTERMINATED(old->status)) return;
 
-        /* Old is terminated and no one else runnable -> return to main. */
+        // Old is terminated and no one else runnable -> return to main.
         current = scheduler_main;
         swap_rfiles(&old->state, &scheduler_main->state);
         return;
     }
 
-    /* Re-admit the yielding LWP if it's still live and not main. */
+    // Admit old back to run queue if still live
     if(old != scheduler_main && !LWPTERMINATED(old->status) 
     && cur_sched->admit){
         cur_sched->admit(old);
@@ -265,7 +261,6 @@ void lwp_start(void){
     current = scheduler_main;
     lwp_yield();
 }
-
 
 // Wait: wait for any thread to terminate; 
 tid_t lwp_wait(int *status){
@@ -311,8 +306,6 @@ tid_t lwp_wait(int *status){
     return tid;
 }
 
-
-
 // Set the current scheduler, migrating threads as needed
 void lwp_set_scheduler(scheduler newsched){
     ensure_scheduler();
@@ -342,8 +335,6 @@ void lwp_set_scheduler(scheduler newsched){
         lwp_yield();
     }
 }
-
-
 
 // Get the current scheduler, initializing default if needed
 scheduler lwp_get_scheduler(void){
