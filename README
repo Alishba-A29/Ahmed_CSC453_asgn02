@@ -10,5 +10,5 @@ Alishba Ahmed (aahmed29)
 % LD_LIBRARY_PATH=. ./tests/<testname>
 
 /* This project had a lot of segfaults and bad pointers. 
-    After a while and a lot of understanding conceptual
-    issues, I was able to get it working. */
+    I fixed my bad exit and now the thread exit correctly.
+    I still hand on test and hope to get it fixed on my own time.*/
