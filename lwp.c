@@ -17,6 +17,8 @@ static thread term_head = NULL, term_tail = NULL;
 static glnode *ghead = NULL;
 static struct fxsave FPU_INIT_CONST;
 static int FPU_INIT_DONE = 0;
+
+// Initialize FPU state constant
 static void init_fpu_const(void){
     if (FPU_INIT_DONE) return;
     struct fxsave tmp = FPU_INIT;
@@ -24,23 +26,25 @@ static void init_fpu_const(void){
     FPU_INIT_DONE = 1;
 }
 
-/* Wake-main bookkeeping: wake main after all distinct remaining LWPs
-   have run at least once since the last exit. */
+// Notification rotation state
 static int notify_need_live = 0;
 static int notify_seen_cnt  = 0;
 
+// Seen TID tracking
 #define SEEN_MAX 1024
 static tid_t notify_seen[SEEN_MAX];
 static int   notify_seen_len = 0;
 
+// Reset notification rotation tracking
 static void notify_reset_counts(int live){
     notify_need_live = live;
     notify_seen_cnt  = 0;
     notify_seen_len  = 0;
 }
 
+// Mark a TID as seen for notification rotation
 static int notify_mark_seen(tid_t tid){
-    /* return 1 if this tid was newly added (i.e., first time seen) */
+    // Check if already seen
     for(int i=0;i<notify_seen_len;i++){
         if(notify_seen[i] == tid) return 0; // already counted
     }
@@ -160,7 +164,6 @@ tid_t lwp_create(lwpfun f, void *arg){
     memcpy(&t->state.fxsave, &FPU_INIT_CONST, sizeof t->state.fxsave);
 
     // Build boot frame for magic64.S (leave; ret)
-    // Build boot frame for magic64.S (leave; ret) with correct ABI alignment
     uintptr_t top    = (uintptr_t)t->stack + t->stacksize;
     /* Pick a 16B-aligned base well inside the mapping, then add +8 so:
     - after 'leave':  rsp = frame+8  => %16 == 0
@@ -192,7 +195,7 @@ void lwp_exit(int code){
     if (cur_sched && cur_sched->remove) cur_sched->remove(me);
     if (me != scheduler_main) term_enqueue(me);
 
-    /* set up your notify rotation target (if you use it) … */
+    // Context switch to another thread
     int live = 0;
     for (glnode *p = ghead; p; p = p->next){
         thread t = p->t;
@@ -200,6 +203,7 @@ void lwp_exit(int code){
     }
     notify_reset_counts(live);
 
+    // Find next thread to run
     thread next = (cur_sched && cur_sched->next) ? cur_sched->next() : NULL;
 
     if(next == me){
@@ -218,9 +222,7 @@ void lwp_exit(int code){
         current = scheduler_main;
         swap_rfiles(&me->state, &scheduler_main->state); /* does not return */
     }
-    /* else return; */
 }
-
 
 // Get TID of current thread (or NO_THREAD if none)
 tid_t lwp_gettid(void){
@@ -231,6 +233,7 @@ tid_t lwp_gettid(void){
 void lwp_yield(void){
     ensure_scheduler();
 
+    // Ensure main thread exists
     if(!scheduler_main){
         scheduler_main = (thread)calloc(1, sizeof(*scheduler_main));
         if(!scheduler_main) return;
@@ -239,14 +242,15 @@ void lwp_yield(void){
         add_thread_global(scheduler_main);
     }
 
+    // Current thread (or main if none)
     thread old = current ? current : scheduler_main;
 
-    /* DISTINCT-SEEN rotation logic (uses notify_mark_seen) */
+    // Notification rotation handling
     if (notify_need_live > 0 &&
         old != scheduler_main &&
         !LWPTERMINATED(old->status))
     {
-        if (notify_mark_seen(old->tid)) {             // <-- use it here
+        if (notify_mark_seen(old->tid)) {
             if (notify_seen_cnt >= notify_need_live) {
                 if (cur_sched && cur_sched->admit)    // keep old in RR
                     cur_sched->admit(old);
@@ -256,10 +260,8 @@ void lwp_yield(void){
                 return;
             }
         }
-        /* fall through to normal scheduling until we’ve seen all */
     }
 
-    /* normal scheduling... (keep your next==old guard here) */
     thread next = (cur_sched && cur_sched->next) ? cur_sched->next() : NULL;
     if(!next){
         if(old == scheduler_main) return;
@@ -279,9 +281,6 @@ void lwp_yield(void){
     current = next;
     swap_rfiles(&old->state, &current->state);
 }
-
-
-
 
 // Start: begin scheduling threads
 void lwp_start(void){
@@ -353,7 +352,8 @@ void lwp_set_scheduler(scheduler newsched){
   scheduler old = cur_sched;
 
   if(old){
-    /* Move all live, non-main threads without using old->next() */
+
+    // Migrate all threads except scheduler_main and current
     for (glnode *n = ghead; n; n = n->next) {
       thread t = n->t;
       if (!t) continue;
@@ -369,12 +369,11 @@ void lwp_set_scheduler(scheduler newsched){
 
   cur_sched = newsched;
 
-  /* If we're idling in scheduler_main, try to run something */
+  // If no current thread, yield to scheduler_main
   if (!current || current == scheduler_main) {
     lwp_yield();
   }
 }
-
 
 // Get the current scheduler, initializing default if needed
 scheduler lwp_get_scheduler(void){

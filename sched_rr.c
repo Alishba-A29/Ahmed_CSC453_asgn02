@@ -4,7 +4,6 @@
 typedef struct node { thread t; struct node *next; } node;
 static node *head = NULL, *tail = NULL;
 
-// Remove a thread from the RR queue
 static void rr_remove(thread t);
 
 static void rr_init(void){

@@ -11,4 +11,10 @@ Alishba Ahmed (aahmed29)
 
 /* This project had a lot of segfaults and bad pointers. 
     I fixed my bad exit and now the thread exit correctly.
-    I still hand on test and hope to get it fixed on my own time.*/
+    I still hang on test and hope to get it fixed on my own time.
+    UPDATE I got it to not hang for 13. I was assuming rotation
+    and the schdel would re use old threds.
+    I fixed this with updated exit and yield to 
+    use a flag I add. I still segfault and I think test 
+    18-28 still hang. Overall, I enjoyed this and
+    given the time this querter I want to comeback and make it work.*/
