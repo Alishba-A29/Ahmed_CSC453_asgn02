@@ -269,6 +269,7 @@ void lwp_yield(void){
         return;
     }
     if(old != scheduler_main && !LWPTERMINATED(old->status) 
+        && next != old
         && cur_sched->admit){
         cur_sched->admit(old);
     }
@@ -339,33 +340,37 @@ tid_t lwp_wait(int *status){
 
 // Set the current scheduler, migrating threads as needed
 void lwp_set_scheduler(scheduler newsched){
-    ensure_scheduler();
-    scheduler old = cur_sched;
-    if(!newsched) newsched = rr_scheduler();
-    if(old == newsched) return;
+  ensure_scheduler();
+  if(!newsched) newsched = rr_scheduler();
+  if(newsched == cur_sched) return;
 
-    if(newsched->init) newsched->init();
+  if(newsched->init) newsched->init();
 
-    // Drain old run queue safely: only move what old->next() yields.
-    if(old && old->next){
-        thread t;
-        while( (t = old->next()) ){
-            if(t != scheduler_main 
-                    && !LWPTERMINATED(t->status) 
-                        && newsched->admit){
-                newsched->admit(t);
-            }
-        }
-        if(old->shutdown) old->shutdown();
+  scheduler old = cur_sched;
+
+  if(old){
+    /* Move all live, non-main threads without using old->next() */
+    for (glnode *n = ghead; n; n = n->next) {
+      thread t = n->t;
+      if (!t) continue;
+      if (t == scheduler_main) continue;
+      if (t == current)        continue;
+      if (LWPTERMINATED(t->status)) continue;
+
+      if (old->remove) old->remove(t);
+      if (newsched->admit) newsched->admit(t);
     }
+    if (old->shutdown) old->shutdown();
+  }
 
-    cur_sched = newsched;
+  cur_sched = newsched;
 
-    // If we're idling in scheduler_main, try to run something
-    if (!current || current == scheduler_main) {
-        lwp_yield();
-    }
+  /* If we're idling in scheduler_main, try to run something */
+  if (!current || current == scheduler_main) {
+    lwp_yield();
+  }
 }
+
 
 // Get the current scheduler, initializing default if needed
 scheduler lwp_get_scheduler(void){
