@@ -187,16 +187,12 @@ void lwp_exit(int code){
     thread me = current;
     if (!me) return;
 
-    /* Mark terminated (low 8-bit code) */
     me->status = MKTERMSTAT(LWP_TERM, code & 0xFF);
 
-    /* Ensure the exiting thread is not in the run queue */
     if (cur_sched && cur_sched->remove) cur_sched->remove(me);
-
-    /* Enqueue on terminated list (not for scheduler_main) */
     if (me != scheduler_main) term_enqueue(me);
 
-    /* Count live non-main LWPs remaining */
+    /* set up your notify rotation target (if you use it) … */
     int live = 0;
     for (glnode *p = ghead; p; p = p->next){
         thread t = p->t;
@@ -205,6 +201,13 @@ void lwp_exit(int code){
     notify_reset_counts(live);
 
     thread next = (cur_sched && cur_sched->next) ? cur_sched->next() : NULL;
+
+    if(next == me){
+        next = (cur_sched && cur_sched->next) 
+            ? cur_sched->next() : NULL;
+        if(next == me) next = NULL;
+    }
+
     if (next){
         current = next;
         swap_rfiles(&me->state, &next->state);  /* does not return */
@@ -213,9 +216,11 @@ void lwp_exit(int code){
 
     if (scheduler_main){
         current = scheduler_main;
-        swap_rfiles(&me->state, &scheduler_main->state);
+        swap_rfiles(&me->state, &scheduler_main->state); /* does not return */
     }
+    /* else return; */
 }
+
 
 // Get TID of current thread (or NO_THREAD if none)
 tid_t lwp_gettid(void){
@@ -226,7 +231,6 @@ tid_t lwp_gettid(void){
 void lwp_yield(void){
     ensure_scheduler();
 
-    /* Lazily capture the system thread context */
     if(!scheduler_main){
         scheduler_main = (thread)calloc(1, sizeof(*scheduler_main));
         if(!scheduler_main) return;
@@ -237,37 +241,22 @@ void lwp_yield(void){
 
     thread old = current ? current : scheduler_main;
 
-    /* If we're in the middle of a "rotation" after an exit,
-       count distinct LWPs as they yield. Only wake main after
-       we've seen all 'notify_need_live' of them at least once. */
-    if (notify_need_live > 0 && old != scheduler_main){
-        if (!LWPTERMINATED(old->status)){
-            /* count this LWP once per rotation */
-            if (notify_mark_seen(old->tid)){
-                if (notify_seen_cnt >= notify_need_live){
-                    /* We've seen all remaining LWPs at least once.
-                       Re-admit 'old' if still live, then wake main. */
-                    if (cur_sched && cur_sched->admit) cur_sched->admit(old);
-                    /* reset to avoid repeated wakes */
-                    notify_reset_counts(0);
-                    current = scheduler_main;
-                    swap_rfiles(&old->state, &scheduler_main->state);
-                    return;
-                }
-            }
-        }
-    }
-
-    /* Normal scheduling */
     thread next = (cur_sched && cur_sched->next) ? cur_sched->next() : NULL;
 
     if(!next){
-        if(old == scheduler_main) return;               /* idle */
-        if(!LWPTERMINATED(old->status)) return;         /* keep running old */
+        if(old == scheduler_main) return;                 /* idle */
+        if(!LWPTERMINATED(old->status)) return;
         current = scheduler_main;
         swap_rfiles(&old->state, &scheduler_main->state);
         return;
     }
+
+    
+    if(next == old){
+        return;
+    }
+
+    /* Only re-admit if we're actually switching away from old */
     if(old != scheduler_main && !LWPTERMINATED(old->status) 
         && next != old
         && cur_sched->admit){
@@ -277,6 +266,7 @@ void lwp_yield(void){
     current = next;
     swap_rfiles(&old->state, &current->state);
 }
+
 
 
 // Start: begin scheduling threads
